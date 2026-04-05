@@ -1,0 +1,11 @@
+# Build output
+main.js
+
+# Node
+node_modules/
+
+# Obsidian settings (generated per-vault)
+data.json
+
+# npm debug
+npm-debug.log*
