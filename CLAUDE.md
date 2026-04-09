@@ -42,19 +42,33 @@ src/
 - **saveData()/loadData()** for persistence — settings + sync state
 - **SecretComponent** for auth token storage (not plain text)
 - **`obsidian` is external** — provided by Obsidian runtime, never bundled
+- **CSRF gotcha** — Bodiless mutation requests (DELETE with no body) return 403 behind Caddy. Use `Content-Type: application/json` header on ALL mutation requests, even via `requestUrl()`.
 
 ## Server API Dependencies
 
-The plugin calls these Silent Stone endpoints (see `docs/API_ENDPOINTS.md`):
+Two API clients, two product tracks (see `docs/API_ENDPOINTS.md`):
+
+### Syncthing Track (`SilentStoneClient` in `api/client.ts`)
 
 | Endpoint | Purpose | Status |
 |----------|---------|--------|
-| `POST /api/auth/token` | Login, get Bearer token | **Not yet built** |
 | `GET /api/auth/me` | Validate session | Exists |
 | `GET /api/folders` | List folders | Exists (admin-only) |
 | `GET /api/folders/:id/files` | List files | Exists (admin-only) |
 | `POST /api/folders/:id/files` | Upload | Exists (admin-only) |
 | `GET /api/health` | Health check | Exists (public) |
+
+### Vault Track (`VaultClient` in `api/vault-client.ts`)
+
+| Endpoint | Purpose | Status |
+|----------|---------|--------|
+| `POST /api/vault/token` | Get Bearer token (90-day) | Exists |
+| `GET /api/vault/status` | Storage quota + metadata | Exists |
+| `GET/PUT /api/vault/manifest` | Encrypted manifest (binary, optimistic concurrency) | Exists |
+| `GET/PUT/DELETE /api/vault/blobs/:id` | Encrypted blob CRUD (binary) | Exists |
+| `POST /api/vault/blobs/batch` | Batch blob upload (base64 JSON) | Exists |
+| `POST /api/vault/keys/setup` | Register encrypted master key | Exists |
+| `GET/PUT /api/vault/keys` | Retrieve/update encrypted key + Argon2 params | Exists |
 
 ## Submission Rules
 
