@@ -161,7 +161,7 @@ export class VaultClient {
     const resp = await requestUrl({
       url: `${this.baseUrl}/api/vault/blobs/${id}`,
       method: 'DELETE',
-      headers: this.bearerHeaders(),
+      headers: this.jsonBearerHeaders(),
     });
     return resp.json as BlobDeleteResponse;
   }
