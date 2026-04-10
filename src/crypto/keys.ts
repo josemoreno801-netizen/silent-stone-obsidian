@@ -19,6 +19,7 @@ export const DEFAULT_ARGON2_PARAMS: Argon2Params = {
   parallelism: 4,
 };
 
+// Protocol constant: fixed HKDF salt so master keys derive identically across devices. Not secret.
 const HKDF_SALT = new TextEncoder().encode('silent-stone-master-key');
 
 /** Copy bytes into a fresh ArrayBuffer (fixes TS 5.7 BufferSource compat with @noble libs). */

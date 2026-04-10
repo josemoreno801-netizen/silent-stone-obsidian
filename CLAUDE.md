@@ -12,6 +12,8 @@ npm run dev          # Watch mode (esbuild rebuilds on change)
 npm run build        # Production build
 npm run lint         # ESLint with obsidian plugin rules
 npm run typecheck    # TypeScript check
+npm test             # Run vitest (src/**/__tests__/**/*.test.ts)
+npm run test:watch   # Vitest in watch mode
 ```
 
 ## Architecture
@@ -77,6 +79,12 @@ Two API clients, two product tracks (see `docs/API_ENDPOINTS.md`):
 - Description: no "This plugin", must end with `.?!)`, under 250 chars
 - ESLint: `eslint-plugin-obsidianmd` with 27 rules
 - All events via `registerEvent()`, secrets via `SecretComponent`
+
+## Crypto Module Gotchas
+
+- **`@noble/hashes` / `@scure/bip39` imports** — Must use `.js` extensions (`@noble/hashes/argon2.js`, not `argon2`). ESM exports maps are strict, vitest enforces them.
+- **TS 5.7 BufferSource compat** — `@noble` returns `Uint8Array<ArrayBufferLike>`, Web Crypto needs `ArrayBuffer`. Use `toBuffer()` from `crypto/keys.ts` to copy bytes into fresh `ArrayBuffer`.
+- **`npm run typecheck` noise** — vitest/vite transitive `.d.ts` errors from `moduleResolution: "node"`. Our `src/` code is clean — filter with `npx tsc --noEmit 2>&1 | grep "^src/"`.
 
 ## Related Docs
 
