@@ -302,13 +302,19 @@ export class SetupModal extends Modal {
 
   private friendlyError(raw: string): string {
     const lower = raw.toLowerCase();
-    if (lower.includes('409') || lower.includes('already initialized')) {
+    if (lower.includes('already initialized') || lower.includes('409')) {
       return 'Vault already initialized for this nickname. Use Unlock instead.';
     }
-    if (lower.includes('401') || lower.includes('unauthorized')) {
-      return 'Wrong password or nickname.';
+    if (lower.includes('awaiting admin approval') || lower.includes('403')) {
+      return 'Your account is awaiting admin approval on the server.';
     }
-    if (lower.includes('server url') || lower.includes('nickname')) {
+    if (lower.includes('too many requests') || lower.includes('429')) {
+      return 'Too many attempts. Wait a few minutes and try again.';
+    }
+    if (lower.includes('invalid credentials') || lower.includes('401') || lower.includes('unauthorized')) {
+      return 'Server rejected your credentials. Check the nickname (case-sensitive) and password in plugin settings match your Silent Stone account exactly.';
+    }
+    if (lower.includes('server url') || lower.includes('nickname must')) {
       return raw;
     }
     return `Setup failed: ${raw}`;

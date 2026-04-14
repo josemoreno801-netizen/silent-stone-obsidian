@@ -473,7 +473,7 @@ describe('SetupModal', () => {
 
     it('surfaces a friendly error on 401-equivalent failure', async () => {
       const plugin = makeFakePlugin({
-        generateVaultMaterial: vi.fn().mockRejectedValue(new Error('HTTP 401: Unauthorized')),
+        generateVaultMaterial: vi.fn().mockRejectedValue(new Error('Invalid credentials')),
       });
       const modal = new SetupModal(plugin.app as never, plugin as never);
       modal.open();
@@ -484,7 +484,34 @@ describe('SetupModal', () => {
       typeInto(confirm.textHandlers[0], 'password1234');
       await clickButton(continueBtn.buttonHandlers[0]);
 
-      expect(findByText(modal.contentEl, 'Wrong password or nickname.')).toBe(true);
+      // Message widened to hint at the likely cause (nickname/password mismatch)
+      // and to distinguish from rate-limit / pending-approval outcomes.
+      expect(
+        findByText(
+          modal.contentEl,
+          'Server rejected your credentials. Check the nickname (case-sensitive) and password in plugin settings match your Silent Stone account exactly.',
+        ),
+      ).toBe(true);
+    });
+
+    it('surfaces rate-limit error distinctly from bad credentials', async () => {
+      const plugin = makeFakePlugin({
+        generateVaultMaterial: vi.fn().mockRejectedValue(
+          new Error('Too many requests. Try again later.'),
+        ),
+      });
+      const modal = new SetupModal(plugin.app as never, plugin as never);
+      modal.open();
+
+      const settings = lastSettingHandlers();
+      const [pw, confirm, continueBtn] = settings.slice(-3);
+      typeInto(pw.textHandlers[0], 'password1234');
+      typeInto(confirm.textHandlers[0], 'password1234');
+      await clickButton(continueBtn.buttonHandlers[0]);
+
+      expect(
+        findByText(modal.contentEl, 'Too many attempts. Wait a few minutes and try again.'),
+      ).toBe(true);
     });
   });
 

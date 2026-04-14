@@ -143,13 +143,56 @@ describe('VaultClient.createToken', () => {
     });
   });
 
-  it('surfaces a typed error on non-2xx (requestUrl rejects)', async () => {
+  it('surfaces server error body on 401 (throw: false so we inspect status)', async () => {
     const client = new VaultClient(BASE_URL, '');
-    mockRequestUrl.mockRejectedValueOnce(httpError(401, 'Unauthorized'));
+    // createToken uses `throw: false` so requestUrl resolves with a 401 response
+    // instead of throwing. The client inspects status and rethrows a typed error
+    // carrying the server's message so setup-modal.friendlyError can distinguish
+    // bad creds from rate-limit, pending-approval, etc.
+    mockRequestUrl.mockResolvedValueOnce({
+      status: 401,
+      json: { error: 'Invalid credentials' },
+      headers: {},
+      arrayBuffer: new ArrayBuffer(0),
+    });
 
     await expect(
       client.createToken({ nickname: 'alice', password: 'wrong' }),
-    ).rejects.toMatchObject({ status: 401 });
+    ).rejects.toMatchObject({ status: 401, message: 'Invalid credentials' });
+
+    // Confirm throw: false is actually set on the requestUrl options.
+    expect(lastCall().throw).toBe(false);
+  });
+
+  it('surfaces server error body on 429 (rate-limited)', async () => {
+    const client = new VaultClient(BASE_URL, '');
+    mockRequestUrl.mockResolvedValueOnce({
+      status: 429,
+      json: { error: 'Too many requests. Try again later.' },
+      headers: {},
+      arrayBuffer: new ArrayBuffer(0),
+    });
+
+    await expect(
+      client.createToken({ nickname: 'alice', password: 'hunter2' }),
+    ).rejects.toMatchObject({
+      status: 429,
+      message: 'Too many requests. Try again later.',
+    });
+  });
+
+  it('falls back to generic HTTP message when server has no error body', async () => {
+    const client = new VaultClient(BASE_URL, '');
+    mockRequestUrl.mockResolvedValueOnce({
+      status: 500,
+      json: undefined,
+      headers: {},
+      arrayBuffer: new ArrayBuffer(0),
+    });
+
+    await expect(
+      client.createToken({ nickname: 'alice', password: 'hunter2' }),
+    ).rejects.toMatchObject({ status: 500, message: 'HTTP 500' });
   });
 });
 

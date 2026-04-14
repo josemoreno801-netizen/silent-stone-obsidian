@@ -91,7 +91,15 @@ export class VaultClient {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req),
+      throw: false,
     });
+    if (resp.status !== 200) {
+      const body = (resp.json as { error?: string } | undefined) ?? {};
+      const msg = body.error ?? `HTTP ${resp.status}`;
+      const err = new Error(msg) as Error & { status: number };
+      err.status = resp.status;
+      throw err;
+    }
     return resp.json as VaultTokenResponse;
   }
 
