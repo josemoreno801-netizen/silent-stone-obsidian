@@ -105,6 +105,19 @@ describe('VaultClient — construction & token lifecycle', () => {
       (lastCall().headers as Record<string, string>).Authorization,
     ).toBe('Bearer new-token');
   });
+
+  // Regression guard: the plugin must be able to read the current Bearer
+  // token back out of the client so it can persist it to Obsidian settings
+  // after first-time setup. Before this getter existed, setup succeeded
+  // server-side but the plugin forgot the token on reload and the "Test
+  // connection" button kept reporting "not connected".
+  it('bearerToken getter reflects the current token through setToken calls', () => {
+    const client = new VaultClient(BASE_URL, 'initial-token');
+    expect(client.bearerToken).toBe('initial-token');
+
+    client.setToken('rotated-token');
+    expect(client.bearerToken).toBe('rotated-token');
+  });
 });
 
 // ── Token endpoint ─────────────────────────────────

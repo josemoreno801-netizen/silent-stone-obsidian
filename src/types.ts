@@ -3,6 +3,7 @@ export interface SilentStoneSyncSettings {
 	serverUrl: string;
 	nickname: string;
 	authToken: string;
+	vaultAuthToken: string;
 
 	// Sync
 	folderId: string;
@@ -20,6 +21,7 @@ export const DEFAULT_SETTINGS: SilentStoneSyncSettings = {
   serverUrl: '',
   nickname: '',
   authToken: '',
+  vaultAuthToken: '',
   folderId: '',
   syncInterval: 5,
   autoSync: true,

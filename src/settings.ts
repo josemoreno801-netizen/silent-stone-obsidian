@@ -61,6 +61,26 @@ export class SilentStoneSyncSettingTab extends PluginSettingTab {
             return;
           }
 
+          const vaultResult = await this.plugin.checkVaultConnection();
+          if (vaultResult.kind === 'connected') {
+            const mb = (vaultResult.usedBytes / (1024 * 1024)).toFixed(1);
+            new Notice(
+              `Vault connected (tier: ${vaultResult.tier}, ${mb} MB used).`,
+            );
+            return;
+          }
+          if (vaultResult.kind === 'unauthorized') {
+            new Notice(
+              'Vault token expired or revoked. Run "Vault: unlock with password" to refresh.',
+            );
+            return;
+          }
+          if (vaultResult.kind === 'error') {
+            new Notice(`Vault check failed: ${vaultResult.message}`);
+            return;
+          }
+
+          // vaultResult.kind === 'not-configured' — fall through to Syncthing check.
           if (this.plugin.settings.authToken) {
             try {
               const user = await client.me();
@@ -69,7 +89,9 @@ export class SilentStoneSyncSettingTab extends PluginSettingTab {
               new Notice('Server reachable but token is invalid. Please log in again.');
             }
           } else {
-            new Notice('Server reachable. Enter credentials and log in.');
+            new Notice(
+              'Server reachable. Run "Vault: first-time setup" or "Vault: unlock with password" from the command palette.',
+            );
           }
         }),
       );

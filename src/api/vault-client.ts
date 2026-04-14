@@ -51,6 +51,18 @@ export class VaultClient {
     this.token = token;
   }
 
+  /**
+   * Read the current Bearer token.
+   *
+   * Exposed so the plugin can persist the token to Obsidian settings after
+   * first-time setup or unlock — without it, the plugin forgets the vault
+   * exists on reload and reports "not connected" even though the server
+   * still holds valid credentials.
+   */
+  get bearerToken(): string {
+    return this.token;
+  }
+
   // ── Auth helpers ───────────────────────────────
 
   private bearerHeaders(): Record<string, string> {

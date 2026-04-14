@@ -31,7 +31,7 @@ export default class SilentStoneSyncPlugin extends Plugin {
   private statusBarEl: HTMLElement | null = null;
 
   // ── Vault sync (v0.3) ─────────────────────────────
-  private vaultClient: VaultClient | null = null;
+  vaultClient: VaultClient | null = null;
   private vaultEngine: SyncEngine | null = null;
   private vaultKey: Uint8Array | null = null;
 
@@ -94,6 +94,18 @@ export default class SilentStoneSyncPlugin extends Plugin {
       if (this.settings.syncOnStartup) {
         this.triggerSync();
       }
+    }
+
+    // Rehydrate vault client from persisted Bearer token (v0.3).
+    // Master key is NOT persisted — the plugin lands in a "connected but
+    // locked" state. User must run "Vault: unlock with password" before any
+    // sync can happen. This is what lets the Test button and status bar
+    // report connectivity accurately across reloads.
+    if (this.settings.serverUrl && this.settings.vaultAuthToken) {
+      this.vaultClient = new VaultClient(
+        this.settings.serverUrl,
+        this.settings.vaultAuthToken,
+      );
     }
 
     // TODO: Register vault file watchers for auto-sync
@@ -197,6 +209,9 @@ export default class SilentStoneSyncPlugin extends Plugin {
       label: `obsidian-${this.manifest.id}`,
     });
 
+    this.settings.vaultAuthToken = tokenResp.token;
+    await this.saveSettings();
+
     const vaultClient = new VaultClient(this.settings.serverUrl, tokenResp.token);
     const keyParams = await vaultClient.getKeys();
     if (!keyParams) {
@@ -274,6 +289,12 @@ export default class SilentStoneSyncPlugin extends Plugin {
       argon2Time: pending.wrapped.argon2Params.time,
       argon2Parallelism: pending.wrapped.argon2Params.parallelism,
     });
+    // Persist the Bearer token so the plugin recognizes the vault as
+    // connected on the next reload. Without this, the setup wizard
+    // succeeds server-side but the plugin forgets the token the moment
+    // Obsidian restarts, and the Test button reports "not connected".
+    this.settings.vaultAuthToken = pending.vaultClient.bearerToken;
+    await this.saveSettings();
     await this.armVaultRuntime(pending.vaultClient, pending.masterKey);
     new Notice('Vault created. Keep your recovery phrase safe.');
   }
@@ -373,5 +394,37 @@ export default class SilentStoneSyncPlugin extends Plugin {
     }
 
     this.updateStatusBar();
+  }
+
+  /**
+   * Probe the vault server for the current stored Bearer token.
+   *
+   * Used by the settings "Test connection" button so users get truthful
+   * feedback after first-time setup instead of the generic "enter
+   * credentials" message. Never mutates state — pure read probe.
+   *
+   * Returns:
+   * - `{ kind: 'not-configured' }` if no vault token is persisted (wizard never completed).
+   * - `{ kind: 'connected', usedBytes, tier }` when the token round-trips through `/api/vault/status`.
+   * - `{ kind: 'unauthorized' }` if the server rejects the token (expired or revoked).
+   * - `{ kind: 'error', message }` on any other failure.
+   */
+  async checkVaultConnection(): Promise<
+    | { kind: 'not-configured' }
+    | { kind: 'connected'; usedBytes: number; tier: string }
+    | { kind: 'unauthorized' }
+    | { kind: 'error'; message: string }
+    > {
+    if (!this.vaultClient) return { kind: 'not-configured' };
+    try {
+      const status = await this.vaultClient.getStatus();
+      return { kind: 'connected', usedBytes: status.storageUsedBytes, tier: status.tier };
+    } catch (e: unknown) {
+      if (e && typeof e === 'object' && 'status' in e && (e as { status: number }).status === 401) {
+        return { kind: 'unauthorized' };
+      }
+      const message = e instanceof Error ? e.message : 'Unknown error';
+      return { kind: 'error', message };
+    }
   }
 }
