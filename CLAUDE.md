@@ -30,8 +30,9 @@ src/
 │   ├── engine.ts    # Diff logic, upload/download orchestration
 │   └── watcher.ts   # Vault event listener, debounced change queue
 └── ui/
-    ├── status-bar.ts # Status bar display
-    └── sync-modal.ts # Manual sync trigger, conflict resolution modal
+    ├── status-bar.ts  # Status bar display
+    ├── unlock-modal.ts # Password unlock modal (command: "Vault: unlock with password")
+    └── sync-modal.ts  # Manual sync trigger, conflict resolution modal (placeholder)
 ```
 
 ## Key Patterns

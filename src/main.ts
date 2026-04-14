@@ -7,6 +7,7 @@ import { unwrapMasterKey } from './crypto/keys';
 import { ManifestManager } from './sync/manifest';
 import { FileWatcher } from './sync/watcher';
 import { SyncEngine } from './sync/engine';
+import { UnlockModal } from './ui/unlock-modal';
 
 const KNOWN_SYNCED_KEY = 'vault.knownSynced';
 
@@ -40,6 +41,12 @@ export default class SilentStoneSyncPlugin extends Plugin {
       id: 'check-connection',
       name: 'Check server connection',
       callback: () => this.checkConnection(),
+    });
+
+    this.addCommand({
+      id: 'vault-unlock',
+      name: 'Vault: unlock with password',
+      callback: () => new UnlockModal(this.app, this).open(),
     });
 
     this.addCommand({
@@ -247,9 +254,7 @@ export default class SilentStoneSyncPlugin extends Plugin {
 
   async triggerVaultSync(): Promise<void> {
     if (!this.vaultEngine) {
-      new Notice(
-        'Vault locked. Run `unlockVaultWithPassword(password)` from the dev console (Ctrl+Shift+I).',
-      );
+      new Notice('Vault locked. Run "Vault: unlock with password" from the command palette.');
       return;
     }
     try {
