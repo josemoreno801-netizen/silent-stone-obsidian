@@ -3,13 +3,26 @@ import { DEFAULT_SETTINGS, type SilentStoneSyncSettings, type SyncStatus } from 
 import { SilentStoneSyncSettingTab } from './settings';
 import { SilentStoneClient } from './api/client';
 import { VaultClient } from './api/vault-client';
-import { unwrapMasterKey } from './crypto/keys';
+import {
+  generateMasterKey,
+  masterKeyToRecoveryPhrase,
+  unwrapMasterKey,
+  wrapMasterKey,
+} from './crypto/keys';
+import type { WrappedKey } from './crypto/types';
 import { ManifestManager } from './sync/manifest';
 import { FileWatcher } from './sync/watcher';
 import { SyncEngine } from './sync/engine';
+import { SetupModal } from './ui/setup-modal';
 import { UnlockModal } from './ui/unlock-modal';
 
 const KNOWN_SYNCED_KEY = 'vault.knownSynced';
+
+export type PendingSetup = {
+  vaultClient: VaultClient;
+  masterKey: Uint8Array;
+  wrapped: WrappedKey;
+};
 
 export default class SilentStoneSyncPlugin extends Plugin {
   settings: SilentStoneSyncSettings = DEFAULT_SETTINGS;
@@ -47,6 +60,12 @@ export default class SilentStoneSyncPlugin extends Plugin {
       id: 'vault-unlock',
       name: 'Vault: unlock with password',
       callback: () => new UnlockModal(this.app, this).open(),
+    });
+
+    this.addCommand({
+      id: 'vault-setup',
+      name: 'Vault: first-time setup',
+      callback: () => new SetupModal(this.app, this).open(),
     });
 
     this.addCommand({
@@ -195,6 +214,79 @@ export default class SilentStoneSyncPlugin extends Plugin {
       },
     });
 
+    await this.armVaultRuntime(vaultClient, masterKey);
+    new Notice('Vault unlocked.');
+  }
+
+  /**
+   * Generate a fresh master key + recovery phrase and wrap the key with the
+   * user's password. No network writes happen here — the caller must show the
+   * recovery phrase, get confirmation, then call {@link commitVaultSetup}.
+   *
+   * Also mints a fresh Bearer token (public endpoint) and verifies no keys
+   * exist server-side yet — if they do, fails fast with a friendly message.
+   */
+  async generateVaultMaterial(password: string): Promise<{
+    recoveryPhrase: string;
+    pendingSetup: PendingSetup;
+  }> {
+    if (!this.settings.serverUrl || !this.settings.nickname) {
+      throw new Error('Server URL and nickname must be configured in settings first.');
+    }
+
+    const bootstrap = new VaultClient(this.settings.serverUrl, '');
+    const tokenResp = await bootstrap.createToken({
+      nickname: this.settings.nickname,
+      password,
+      label: `obsidian-${this.manifest.id}-setup`,
+    });
+
+    const vaultClient = new VaultClient(this.settings.serverUrl, tokenResp.token);
+    const existing = await vaultClient.getKeys();
+    if (existing !== null) {
+      throw new Error('Vault already initialized for this nickname. Use Unlock instead.');
+    }
+
+    const material = generateMasterKey();
+    const phrase = masterKeyToRecoveryPhrase(material).mnemonic;
+    const wrapped = await wrapMasterKey(material.key, password);
+
+    return {
+      recoveryPhrase: phrase,
+      pendingSetup: {
+        vaultClient,
+        masterKey: material.key,
+        wrapped,
+      },
+    };
+  }
+
+  /**
+   * Register the wrapped master key on the server and arm the runtime so the
+   * vault is immediately usable. Called after the user confirms they saved
+   * the recovery phrase.
+   */
+  async commitVaultSetup(pending: PendingSetup): Promise<void> {
+    await pending.vaultClient.setupKeys({
+      encryptedMasterKey: pending.wrapped.encryptedMasterKey,
+      salt: pending.wrapped.salt,
+      argon2Memory: pending.wrapped.argon2Params.memory,
+      argon2Time: pending.wrapped.argon2Params.time,
+      argon2Parallelism: pending.wrapped.argon2Params.parallelism,
+    });
+    await this.armVaultRuntime(pending.vaultClient, pending.masterKey);
+    new Notice('Vault created. Keep your recovery phrase safe.');
+  }
+
+  /**
+   * Construct the manifest manager, file watcher, and sync engine around a
+   * ready-to-use VaultClient + master key, then transition the plugin into
+   * the unlocked state. Shared by the unlock and first-time-setup flows.
+   */
+  private async armVaultRuntime(
+    vaultClient: VaultClient,
+    masterKey: Uint8Array,
+  ): Promise<void> {
     const manifest = new ManifestManager(vaultClient, masterKey);
     const watcher = new FileWatcher(this, this.app.vault, {
       ignorePaths: this.settings.ignorePaths,
@@ -239,7 +331,6 @@ export default class SilentStoneSyncPlugin extends Plugin {
     this.vaultKey = masterKey;
     this.status = 'idle';
     this.updateStatusBar();
-    new Notice('Vault unlocked.');
   }
 
   lockVault(): void {
