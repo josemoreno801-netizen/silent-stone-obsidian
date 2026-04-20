@@ -9,7 +9,10 @@
 		"lint": "eslint src/",
 		"typecheck": "tsc --noEmit",
 		"test": "vitest run",
-		"test:watch": "vitest"
+		"test:watch": "vitest",
+		"version": "node scripts/sync-version.mjs && git add manifest.json versions.json",
+		"postversion": "git push --follow-tags",
+		"install-to-vault": "bash scripts/install-to-vault.sh"
 	},
 	"keywords": [
 		"obsidian-plugin",

@@ -7,14 +7,50 @@ Obsidian community plugin that syncs vaults through a private Silent Stone serve
 ## Commands
 
 ```bash
-npm install          # Install dependencies
-npm run dev          # Watch mode (esbuild rebuilds on change)
-npm run build        # Production build
-npm run lint         # ESLint with obsidian plugin rules
-npm run typecheck    # TypeScript check
-npm test             # Run vitest (src/**/__tests__/**/*.test.ts)
-npm run test:watch   # Vitest in watch mode
+npm install                                  # Install dependencies
+npm run dev                                  # Watch mode (esbuild rebuilds on change)
+npm run build                                # Production build
+npm run lint                                 # ESLint with obsidian plugin rules
+npm run typecheck                            # TypeScript check
+npm test                                     # Run vitest (src/**/__tests__/**/*.test.ts)
+npm run test:watch                           # Vitest in watch mode
+npm run install-to-vault -- <vault-path>     # Symlink build artifacts into a real Obsidian vault
+npm version patch                            # Cut a release (bumps + syncs + commits + tags + pushes)
 ```
+
+## Local Vault Setup (for live dev)
+
+`npm run dev` produces `main.js` continuously, but Obsidian only sees changes if the build output is inside a vault's `.obsidian/plugins/silent-stone-sync/` directory. Use `install-to-vault` to symlink it:
+
+```bash
+npm install
+npm run install-to-vault -- /path/to/your/vault     # idempotent, replaces existing symlinks
+npm run dev                                          # watch mode rebuilds main.js on save
+# In Obsidian: Cmd/Ctrl+R reloads the app and picks up the rebuilt main.js
+```
+
+The script aborts if the path isn't a real Obsidian vault (missing `.obsidian/`). Open the folder in Obsidian once first to initialize it.
+
+## Distribution
+
+Plugin distribution is **automated via GitHub Releases** (`.github/workflows/plugin-release.yml`). Cutting a release is one command:
+
+```bash
+cd obsidian-plugin
+npm version patch     # also: minor, major
+```
+
+This triggers the npm `version` lifecycle:
+1. `npm version` bumps `package.json`.
+2. The `version` script (`scripts/sync-version.mjs`) syncs `manifest.json` + `versions.json` to match.
+3. npm commits all three files together.
+4. npm tags the commit `plugin-v<X.Y.Z>` (prefix from `.npmrc`).
+5. The `postversion` script pushes commit + tag with `git push --follow-tags`.
+6. The push of `plugin-v*` triggers `plugin-release.yml`, which builds and creates a GitHub Release with `main.js`, `manifest.json`, `styles.css` attached at the release root.
+
+Testers consume the release via **BRAT** (Beta Reviewers Auto-update Tester) by pasting `josemoreno801-netizen/silent-stone` into BRAT's "Add Beta Plugin" dialog. They auto-update on every release. Full tester instructions in `docs/OBSIDIAN_PLUGIN_DEV.md` § 11.
+
+**Dry-run (bump locally without pushing)**: temporarily remove the `postversion` script from `package.json` before running `npm version`, then restore it.
 
 ## Architecture
 
