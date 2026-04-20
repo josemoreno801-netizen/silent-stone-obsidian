@@ -1,7 +1,7 @@
 {
 	"id": "silent-stone-sync",
 	"name": "Silent Stone Sync",
-	"version": "0.1.1",
+	"version": "0.1.2",
 	"minAppVersion": "0.15.0",
 	"description": "Encrypted vault sync through your private Silent Stone server.",
 	"author": "josemoreno801-netizen",
