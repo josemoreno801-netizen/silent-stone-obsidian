@@ -1,0 +1,80 @@
+name: Plugin Release
+
+# Cuts a GitHub Release for the Obsidian plugin when a `plugin-v*` tag is
+# pushed. Attaches main.js, manifest.json, and styles.css at the release root
+# so BRAT (Beta Reviewers Auto-update Tester) and the official Obsidian
+# community plugins registry can pattern-match the asset names exactly.
+#
+# Usage:
+#   npm version patch         # bumps package.json
+#   npm run release           # syncs manifest+versions, commits, tags, pushes
+#
+# The push of the `plugin-v<X.Y.Z>` tag triggers this workflow.
+
+on:
+  push:
+    tags:
+      - 'plugin-v*'
+
+permissions:
+  contents: write  # required to create releases and upload assets
+
+# Avoid double-cutting a release if a tag is somehow re-pushed.
+concurrency:
+  group: plugin-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0  # full history for auto-generated release notes
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install plugin dependencies
+        run: npm ci
+
+      - name: Build plugin
+        run: npm run build
+
+      - name: Verify manifest version matches tag
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          # Strip the 'plugin-v' prefix from the tag (plugin-v0.1.2 -> 0.1.2)
+          TAG_VERSION="${REF_NAME#plugin-v}"
+          MANIFEST_VERSION=$(node -p "require('./manifest.json').version")
+          if [ "$TAG_VERSION" != "$MANIFEST_VERSION" ]; then
+            echo "::error::Tag version ($TAG_VERSION) does not match manifest.json version ($MANIFEST_VERSION)"
+            exit 1
+          fi
+          echo "Version check OK: $TAG_VERSION"
+
+      - name: Verify required release assets exist
+        run: |
+          for f in main.js manifest.json styles.css; do
+            if [ ! -f "$f" ]; then
+              echo "::error::Required release asset missing: $f"
+              exit 1
+            fi
+          done
+          echo "All release assets present."
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            main.js
+            manifest.json
+            styles.css

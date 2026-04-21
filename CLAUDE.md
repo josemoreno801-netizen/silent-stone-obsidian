@@ -36,7 +36,6 @@ The script aborts if the path isn't a real Obsidian vault (missing `.obsidian/`)
 Plugin distribution is **automated via GitHub Releases** (`.github/workflows/plugin-release.yml`). Cutting a release is one command:
 
 ```bash
-cd obsidian-plugin
 npm version patch     # also: minor, major
 ```
 
@@ -48,7 +47,7 @@ This triggers the npm `version` lifecycle:
 5. The `postversion` script pushes commit + tag with `git push --follow-tags`.
 6. The push of `plugin-v*` triggers `plugin-release.yml`, which builds and creates a GitHub Release with `main.js`, `manifest.json`, `styles.css` attached at the release root.
 
-Testers consume the release via **BRAT** (Beta Reviewers Auto-update Tester) by pasting `josemoreno801-netizen/silent-stone` into BRAT's "Add Beta Plugin" dialog. They auto-update on every release. Full tester instructions in `docs/OBSIDIAN_PLUGIN_DEV.md` § 11.
+Testers consume the release via **BRAT** (Beta Reviewers Auto-update Tester) by pasting `josemoreno801-netizen/silent-stone-obsidian` into BRAT's "Add Beta Plugin" dialog. They auto-update on every release. Full tester instructions in `docs/DEV.md` § 11.
 
 **Dry-run (bump locally without pushing)**: temporarily remove the `postversion` script from `package.json` before running `npm version`, then restore it.
 
@@ -125,6 +124,14 @@ Two API clients, two product tracks (see `docs/API_ENDPOINTS.md`):
 
 ## Related Docs
 
-- `docs/OBSIDIAN_PLUGIN_DEV.md` — API reference
-- `docs/OBSIDIAN_PLUGIN_ARCHITECTURE.md` — System design + diagrams
-- `docs/API_ENDPOINTS.md` — Server API reference
+- `docs/DEV.md` — API reference, tester onboarding, release workflow deep-dive
+- `docs/ARCHITECTURE.md` — System design + diagrams
+- Server API reference lives in the private `silent-stone` repo (not public)
+
+## Repository Context
+
+This repo (`silent-stone-obsidian`) is the **public, open-source** Obsidian plugin for the Silent Stone vault sync service.
+
+- **Why it's public**: Silent Stone promises end-to-end encryption — "your server never sees plaintext." This repo is the proof. Customers, security researchers, and skeptics can audit `src/crypto/` to verify encryption happens client-side.
+- **Related private repo**: The server that serves `/api/vault/*` endpoints is proprietary (handles billing, admin dashboard, infrastructure). Its privacy does not weaken the encryption claim — the plugin's crypto is what matters, and it's fully visible here.
+- **Issues and roadmap**: Open a GitHub issue here for any plugin-specific bug, feature, or crypto concern. Server-coupled work is tracked in the private repo.
