@@ -13,6 +13,7 @@ import type { WrappedKey } from './crypto/types';
 import { ManifestManager } from './sync/manifest';
 import { FileWatcher } from './sync/watcher';
 import { SyncEngine } from './sync/engine';
+import { LoginModal } from './ui/login-modal';
 import { SetupModal } from './ui/setup-modal';
 import { UnlockModal } from './ui/unlock-modal';
 
@@ -54,6 +55,12 @@ export default class SilentStoneSyncPlugin extends Plugin {
       id: 'check-connection',
       name: 'Check server connection',
       callback: () => this.checkConnection(),
+    });
+
+    this.addCommand({
+      id: 'vault-login',
+      name: 'Vault: log in',
+      callback: () => new LoginModal(this.app, this).open(),
     });
 
     this.addCommand({
@@ -106,6 +113,13 @@ export default class SilentStoneSyncPlugin extends Plugin {
         this.settings.serverUrl,
         this.settings.vaultAuthToken,
       );
+    } else if (!this.settings.vaultAuthToken) {
+      // First-run UX: no Bearer token persisted → auto-popup login modal so
+      // the user isn't left hunting through the command palette. Deferred via
+      // setTimeout so the workspace finishes loading before the modal opens.
+      this.app.workspace.onLayoutReady(() => {
+        new LoginModal(this.app, this).open();
+      });
     }
 
     // TODO: Register vault file watchers for auto-sync
