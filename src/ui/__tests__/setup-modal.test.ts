@@ -282,16 +282,6 @@ function makeFakePlugin(overrides: Partial<FakePlugin> = {}): FakePlugin {
 
 type TreeNode = { textContent: string; children: TreeNode[] };
 
-/** Recursively flatten an element tree into a single text blob. */
-function allText(el: unknown): string {
-  const node = el as TreeNode;
-  let out = node.textContent ?? '';
-  for (const c of node.children ?? []) {
-    out += '\n' + allText(c);
-  }
-  return out;
-}
-
 function findByText(el: unknown, needle: string): boolean {
   const node = el as TreeNode;
   if ((node.textContent ?? '').includes(needle)) return true;

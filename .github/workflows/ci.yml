@@ -1,0 +1,50 @@
+name: CI
+
+# PR-gated regression shield. Runs lint / typecheck / test / build on every
+# pull request and every push to main. Complements plugin-release.yml (which
+# only runs on plugin-v* tags) so regressions are caught between releases,
+# not after BRAT users hit them.
+#
+# Security note: no untrusted event payload fields are referenced in run:
+# commands. github.ref in concurrency.group is reference metadata, not
+# user-controllable content.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
