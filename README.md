@@ -100,3 +100,5 @@ MIT — see [`LICENSE`](./LICENSE).
 ---
 
 *Silent Stone Sync — your notes, your keys, your trust.*
+
+Copilot dispatch verification probe 2026-04-25 — disregard.
