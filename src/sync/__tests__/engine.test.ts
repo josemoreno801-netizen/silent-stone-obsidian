@@ -14,6 +14,8 @@ import { ManifestManager } from '../manifest';
 import { SyncEngine, type SyncVault } from '../engine';
 import type { ChangeEvent } from '../watcher';
 import type { ManifestEntry } from '../manifest';
+import type { SyncStatusEvent } from '../../types';
+import type { VaultStatusResponse } from '../../api/vault-types';
 
 // ── Helpers ────────────────────────────────────────
 const BASE_URL = 'https://vault.example.com';
@@ -116,7 +118,7 @@ async function makeHarness(opts: HarnessOpts = {}): Promise<Harness> {
     watcher: queue,
     vault,
     masterKey: MASTER_KEY,
-    onStatusChange: (s) => statuses.push(s),
+    onStatusChange: (e) => statuses.push(e.state),
     knownSynced: opts.knownSynced,
     onStateUpdate: async (ks) => {
       savedKnownSynced.push(new Set(ks));
@@ -533,6 +535,20 @@ describe('SyncEngine.sync — orchestrator', () => {
 
     mockRequestUrl.mockResolvedValueOnce(okJson({ ok: true, blobId: 'x', size: 7 }));
     mockRequestUrl.mockResolvedValueOnce(okJson({ ok: true, sequenceNumber: 1 }));
+    // sync() also POSTs fileCount → mock the patchStatus reply so the assertion
+    // surface stays focused on the existing pull+push behaviour.
+    mockRequestUrl.mockResolvedValueOnce(
+      okJson<VaultStatusResponse>({
+        storageUsedBytes: 7,
+        storageLimitBytes: 1000,
+        tier: 'free',
+        lastSyncAt: '2026-04-26T20:00:00Z',
+        manifestSeq: 1,
+        fileCount: 1,
+        keysConfigured: false,
+        suspended: false,
+      }),
+    );
 
     await h.engine.sync();
 
@@ -541,5 +557,130 @@ describe('SyncEngine.sync — orchestrator', () => {
     // Second call is the blob PUT
     expect(mockRequestUrl.mock.calls[1][0].method).toBe('PUT');
     expect(mockRequestUrl.mock.calls[1][0].url).toMatch(/\/blobs\//);
+  });
+});
+
+// ── sync(): trust-the-sync metrics + patchStatus POST ──
+describe('SyncEngine.sync — final metrics event + observability ping', () => {
+  it('POSTs fileCount via PATCH /api/vault/status and emits a final enriched idle event', async () => {
+    // Initial 404 for manifest setup
+    mockRequestUrl.mockRejectedValueOnce(httpError(404));
+    const client = new VaultClient(BASE_URL, TOKEN);
+    const manifest = new ManifestManager(client, MASTER_KEY);
+    await manifest.load();
+    mockRequestUrl.mockClear();
+
+    const events: SyncStatusEvent[] = [];
+    const queue = new FakeQueue(); // empty — push is a no-op
+    const vault = new FakeVault();
+
+    const engine = new SyncEngine({
+      client,
+      manifest,
+      watcher: queue,
+      vault,
+      masterKey: MASTER_KEY,
+      onStatusChange: (e) => events.push(e),
+    });
+
+    // pull's manifest.load() → 404 (no remote entries) → emits syncing+idle
+    mockRequestUrl.mockRejectedValueOnce(httpError(404));
+    // patchStatus → updated VaultStatusResponse
+    mockRequestUrl.mockResolvedValueOnce(
+      okJson<VaultStatusResponse>({
+        storageUsedBytes: 0,
+        storageLimitBytes: 1000,
+        tier: 'free',
+        lastSyncAt: '2026-04-26T20:00:00Z',
+        manifestSeq: 0,
+        fileCount: 0,
+        keysConfigured: false,
+        suspended: false,
+      }),
+    );
+
+    await engine.sync();
+
+    // Final event must be the canonical sync-complete: idle + metrics
+    const last = events.at(-1)!;
+    expect(last.state).toBe('idle');
+    expect(last.fileCount).toBe(0);
+    expect(typeof last.lastSyncAt).toBe('string');
+
+    // PATCH /api/vault/status was called with the right shape
+    const calls = mockRequestUrl.mock.calls;
+    const patchCall = calls.find((c) => (c[0] as { method: string }).method === 'PATCH');
+    expect(patchCall).toBeDefined();
+    const patchArgs = patchCall![0] as { url: string; method: string; body: string };
+    expect(patchArgs.url).toBe(`${BASE_URL}/api/vault/status`);
+    expect(JSON.parse(patchArgs.body)).toEqual({ fileCount: 0 });
+  });
+
+  it('does not turn a successful sync into an error if patchStatus fails (best-effort)', async () => {
+    // Silence the expected console.warn for the failed patchStatus.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    mockRequestUrl.mockRejectedValueOnce(httpError(404));
+    const client = new VaultClient(BASE_URL, TOKEN);
+    const manifest = new ManifestManager(client, MASTER_KEY);
+    await manifest.load();
+    mockRequestUrl.mockClear();
+
+    const events: SyncStatusEvent[] = [];
+    const queue = new FakeQueue();
+    const vault = new FakeVault();
+
+    const engine = new SyncEngine({
+      client,
+      manifest,
+      watcher: queue,
+      vault,
+      masterKey: MASTER_KEY,
+      onStatusChange: (e) => events.push(e),
+    });
+
+    mockRequestUrl.mockRejectedValueOnce(httpError(404)); // pull
+    mockRequestUrl.mockRejectedValueOnce(httpError(500)); // patchStatus blows up
+
+    await expect(engine.sync()).resolves.toBeUndefined();
+
+    // Final event still idle — sync itself succeeded even though patchStatus failed
+    expect(events.at(-1)?.state).toBe('idle');
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it('emits state: error with errorMessage when push fails', async () => {
+    mockRequestUrl.mockRejectedValueOnce(httpError(404));
+    const client = new VaultClient(BASE_URL, TOKEN);
+    const manifest = new ManifestManager(client, MASTER_KEY);
+    await manifest.load();
+    mockRequestUrl.mockClear();
+
+    const events: SyncStatusEvent[] = [];
+    const queue = new FakeQueue();
+    const vault = new FakeVault();
+    const plaintext = new TextEncoder().encode('boom').buffer as ArrayBuffer;
+    vault.files.set('boom.md', plaintext);
+    queue.events = [{ kind: 'upsert', path: 'boom.md' }];
+
+    const engine = new SyncEngine({
+      client,
+      manifest,
+      watcher: queue,
+      vault,
+      masterKey: MASTER_KEY,
+      onStatusChange: (e) => events.push(e),
+    });
+
+    mockRequestUrl.mockRejectedValueOnce(httpError(404)); // pull is empty (no manifest)
+    mockRequestUrl.mockRejectedValueOnce(httpError(500, { error: 'kaboom' })); // blob upload fails
+
+    await expect(engine.sync()).rejects.toThrow();
+
+    const errorEvent = events.find((e) => e.state === 'error');
+    expect(errorEvent).toBeDefined();
+    expect(errorEvent!.errorMessage).toBeDefined();
+    expect(typeof errorEvent!.errorMessage).toBe('string');
   });
 });

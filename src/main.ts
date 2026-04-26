@@ -1,5 +1,11 @@
 import { Notice, Plugin } from 'obsidian';
-import { DEFAULT_SETTINGS, type SilentStoneSyncSettings, type SyncStatus } from './types';
+import {
+  DEFAULT_SETTINGS,
+  type SilentStoneSyncSettings,
+  type SyncStatus,
+  type SyncStatusEvent,
+  type PersistedSyncMetrics,
+} from './types';
 import { SilentStoneSyncSettingTab } from './settings';
 import { SilentStoneClient } from './api/client';
 import { VaultClient } from './api/vault-client';
@@ -18,6 +24,7 @@ import { SetupModal } from './ui/setup-modal';
 import { UnlockModal } from './ui/unlock-modal';
 
 const KNOWN_SYNCED_KEY = 'vault.knownSynced';
+const SYNC_METRICS_KEY = 'vault.syncMetrics';
 
 export type PendingSetup = {
   vaultClient: VaultClient;
@@ -35,6 +42,12 @@ export default class SilentStoneSyncPlugin extends Plugin {
   vaultClient: VaultClient | null = null;
   private vaultEngine: SyncEngine | null = null;
   private vaultKey: Uint8Array | null = null;
+
+  // ── Trust-the-sync (v0.1.7) ───────────────────────
+  /** Last-known metrics from a successful sync, restored on plugin reload. */
+  lastSyncMetrics: PersistedSyncMetrics = {};
+  /** Subscribers (e.g. settings panel) notified on every engine status transition. */
+  private statusListeners: Set<(event: SyncStatusEvent) => void> = new Set();
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -87,6 +100,12 @@ export default class SilentStoneSyncPlugin extends Plugin {
       callback: () => this.lockVault(),
     });
 
+    this.addCommand({
+      id: 'open-dashboard',
+      name: 'Open Silent Stone dashboard',
+      callback: () => this.openDashboard(),
+    });
+
     // Ribbon icon
     this.addRibbonIcon('cloud', 'Sync with Silent Stone', () => {
       this.triggerVaultSync();
@@ -135,7 +154,13 @@ export default class SilentStoneSyncPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const data = (await this.loadData()) ?? {};
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
+    // Restore last-known sync metrics so the settings panel can render the post-sync state
+    // immediately on plugin reload (avoids a "no data" flash before the next sync runs).
+    if (data[SYNC_METRICS_KEY] && typeof data[SYNC_METRICS_KEY] === 'object') {
+      this.lastSyncMetrics = data[SYNC_METRICS_KEY] as PersistedSyncMetrics;
+    }
   }
 
   async saveSettings(): Promise<void> {
@@ -145,6 +170,32 @@ export default class SilentStoneSyncPlugin extends Plugin {
     if (this.settings.serverUrl && this.settings.authToken) {
       this.client = new SilentStoneClient(this.settings.serverUrl, this.settings.authToken);
     }
+  }
+
+  /**
+   * Persist `this.lastSyncMetrics` alongside settings + knownSynced. Reads existing
+   * stored data first to avoid clobbering sibling keys.
+   */
+  private async persistSyncMetrics(): Promise<void> {
+    const data = (await this.loadData()) ?? {};
+    data[SYNC_METRICS_KEY] = this.lastSyncMetrics;
+    await this.saveData(data);
+  }
+
+  /** Subscribe to live status events from the sync engine. Returns an unsubscribe handle. */
+  addStatusListener(listener: (event: SyncStatusEvent) => void): () => void {
+    this.statusListeners.add(listener);
+    return () => this.statusListeners.delete(listener);
+  }
+
+  /**
+   * Open the Silent Stone web dashboard in the user's browser, scoped to whichever
+   * server URL the plugin is connected to. Falls back to the canonical prod host
+   * when settings are empty so the button never silently no-ops.
+   */
+  openDashboard(): void {
+    const host = this.settings.serverUrl?.replace(/\/+$/, '') || 'https://silentstone.one';
+    window.open(`${host}/member`, '_blank');
   }
 
   private updateStatusBar(): void {
@@ -354,8 +405,25 @@ export default class SilentStoneSyncPlugin extends Plugin {
       },
       masterKey,
       knownSynced,
-      onStatusChange: (s) => {
-        this.status = s === 'idle' ? 'idle' : s === 'syncing' ? 'syncing' : 'error';
+      onStatusChange: (event) => {
+        this.status =
+          event.state === 'idle' ? 'idle' : event.state === 'syncing' ? 'syncing' : 'error';
+
+        // Capture metrics on the canonical "sync complete" event (only sync() emits with metrics).
+        // Error events update the message so the settings panel can surface the latest reason.
+        if (event.state === 'idle' && event.fileCount !== undefined) {
+          this.lastSyncMetrics = {
+            lastSyncAt: event.lastSyncAt,
+            fileCount: event.fileCount,
+            errorMessage: undefined,
+          };
+          void this.persistSyncMetrics();
+        } else if (event.state === 'error' && event.errorMessage) {
+          this.lastSyncMetrics = { ...this.lastSyncMetrics, errorMessage: event.errorMessage };
+          void this.persistSyncMetrics();
+        }
+
+        for (const listener of this.statusListeners) listener(event);
         this.updateStatusBar();
       },
       onStateUpdate: async (ks) => {

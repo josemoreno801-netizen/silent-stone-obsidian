@@ -74,6 +74,7 @@ describe('VaultClient — construction & token lifecycle', () => {
         tier: 'free',
         lastSyncAt: null,
         manifestSeq: 0,
+        fileCount: 0,
         keysConfigured: false,
         suspended: false,
       }),
@@ -219,6 +220,7 @@ describe('VaultClient.getStatus', () => {
       tier: 'free',
       lastSyncAt: '2026-04-10T00:00:00Z',
       manifestSeq: 7,
+      fileCount: 5,
       keysConfigured: true,
       suspended: false,
     };
@@ -244,6 +246,48 @@ describe('VaultClient.getStatus', () => {
     const client = new VaultClient(BASE_URL, TOKEN);
     mockRequestUrl.mockRejectedValueOnce(httpError(404));
     await expect(client.getStatus()).rejects.toMatchObject({ status: 404 });
+  });
+});
+
+describe('VaultClient.patchStatus', () => {
+  it('PATCHes /api/vault/status with Bearer + JSON body and returns the updated VaultStatusResponse', async () => {
+    const client = new VaultClient(BASE_URL, TOKEN);
+    const updated: VaultStatusResponse = {
+      storageUsedBytes: 1234,
+      storageLimitBytes: 52_428_800,
+      tier: 'free',
+      lastSyncAt: '2026-04-26T20:00:00Z',
+      manifestSeq: 7,
+      fileCount: 47,
+      keysConfigured: true,
+      suspended: false,
+    };
+    mockRequestUrl.mockResolvedValueOnce(okJson(updated));
+
+    const result = await client.patchStatus({ fileCount: 47 });
+    expect(result).toEqual(updated);
+
+    const call = lastCall();
+    expect(call.url).toBe(`${BASE_URL}/api/vault/status`);
+    expect(call.method).toBe('PATCH');
+
+    const headers = call.headers as Record<string, string>;
+    expect(headers.Authorization).toBe(`Bearer ${TOKEN}`);
+    expect(headers['Content-Type']).toBe('application/json');
+
+    expect(JSON.parse(call.body as string)).toEqual({ fileCount: 47 });
+  });
+
+  it('propagates 401 errors from the server', async () => {
+    const client = new VaultClient(BASE_URL, TOKEN);
+    mockRequestUrl.mockRejectedValueOnce(httpError(401));
+    await expect(client.patchStatus({ fileCount: 1 })).rejects.toMatchObject({ status: 401 });
+  });
+
+  it('propagates 400 errors when fileCount is rejected by Zod', async () => {
+    const client = new VaultClient(BASE_URL, TOKEN);
+    mockRequestUrl.mockRejectedValueOnce(httpError(400));
+    await expect(client.patchStatus({ fileCount: -1 })).rejects.toMatchObject({ status: 400 });
   });
 });
 

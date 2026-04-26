@@ -1,372 +1,483 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // ── Mock `obsidian` ────────────────────────────────
-// SilentStoneSyncSettingTab extends PluginSettingTab and uses the Setting
-// builder + Notice. We hand-roll the minimum surface it touches. The tab
-// renders 9 Setting rows across 5 widget types: addText, addToggle,
-// addSlider, addDropdown, addButton. Each captures its change handler so
-// tests can drive the "Test connection" button and assert saveSettings is
-// called on value changes.
-const { MockPluginSettingTab, MockSetting, MockNotice, lastSettings } = vi.hoisted(() => {
-	type FakeEl = {
-		textContent: string;
-		children: FakeEl[];
-		cls: string[];
-		createEl: (tag: string, opts?: { text?: string; cls?: string }) => FakeEl;
-		empty: () => void;
-	};
+// Hand-rolled mocks for the Obsidian Setting builder + PluginSettingTab. The
+// production code exercises addText, addToggle, addSlider, addDropdown,
+// addButton (with multiple buttons per Setting), setWarning, setTooltip, and
+// setCta. The mock captures every change/click handler so tests can drive them.
+const { MockPluginSettingTab, MockSetting, MockNotice, capturedSettings } = vi.hoisted(
+  () => {
+    type FakeEl = {
+      textContent: string;
+      cls: string[];
+      children: FakeEl[];
+      createEl: (tag: string, opts?: { text?: string; cls?: string }) => FakeEl;
+      createDiv: (opts?: { text?: string; cls?: string }) => FakeEl;
+      createSpan: (opts?: { text?: string; cls?: string }) => FakeEl;
+      empty: () => void;
+      setText: (s: string) => void;
+    };
 
-	function createFakeEl(): FakeEl {
-		const el: FakeEl = {
-			textContent: '',
-			children: [],
-			cls: [],
-			createEl: (_tag, opts) => {
-				const child = createFakeEl();
-				if (opts?.text) child.textContent = opts.text;
-				if (opts?.cls) {
-					for (const c of opts.cls.split(/\s+/)) child.cls.push(c);
-				}
-				el.children.push(child);
-				return child;
-			},
-			empty: () => {
-				el.children = [];
-				el.textContent = '';
-			},
-		};
-		return el;
-	}
+    function createFakeEl(): FakeEl {
+      const el: FakeEl = {
+        textContent: '',
+        cls: [],
+        children: [],
+        createEl: (_tag, opts) => {
+          const child = createFakeEl();
+          if (opts?.text) child.textContent = opts.text;
+          if (opts?.cls) child.cls.push(...opts.cls.split(/\s+/));
+          el.children.push(child);
+          return child;
+        },
+        createDiv: (opts) => {
+          const child = createFakeEl();
+          if (opts?.text) child.textContent = opts.text;
+          if (opts?.cls) child.cls.push(...opts.cls.split(/\s+/));
+          el.children.push(child);
+          return child;
+        },
+        createSpan: (opts) => {
+          const child = createFakeEl();
+          if (opts?.text) child.textContent = opts.text;
+          if (opts?.cls) child.cls.push(...opts.cls.split(/\s+/));
+          el.children.push(child);
+          return child;
+        },
+        empty: () => {
+          el.children = [];
+          el.textContent = '';
+        },
+        setText: (s: string) => {
+          el.textContent = s;
+        },
+      };
+      return el;
+    }
 
-	type Captured = {
-		name: string;
-		textOnChange?: (v: string) => void;
-		toggleOnChange?: (v: boolean) => void;
-		sliderOnChange?: (v: number) => void;
-		dropdownOnChange?: (v: string) => void;
-		buttonOnClick?: () => void | Promise<void>;
-	};
+    type Captured = {
+      name: string;
+      desc: string;
+      textOnChange?: (v: string) => void | Promise<void>;
+      toggleOnChange?: (v: boolean) => void | Promise<void>;
+      sliderOnChange?: (v: number) => void | Promise<void>;
+      dropdownOnChange?: (v: string) => void | Promise<void>;
+      buttonClicks: Array<{ label?: string; onClick: () => void | Promise<void> }>;
+    };
 
-	const allSettings: Captured[] = [];
+    const allSettings: Captured[] = [];
 
-	class MockPluginSettingTab {
-		app: unknown;
-		plugin: unknown;
-		containerEl: FakeEl;
+    class MockPluginSettingTab {
+      app: unknown;
+      plugin: unknown;
+      containerEl: FakeEl;
+      constructor(app: unknown, plugin: unknown) {
+        this.app = app;
+        this.plugin = plugin;
+        this.containerEl = createFakeEl();
+      }
+      hide(): void {
+        // base class no-op; subclass may call super.hide()
+      }
+    }
 
-		constructor(app: unknown, plugin: unknown) {
-			this.app = app;
-			this.plugin = plugin;
-			this.containerEl = createFakeEl();
-		}
-	}
+    class MockSetting {
+      private captured: Captured;
+      constructor(_parent: unknown) {
+        this.captured = { name: '', desc: '', buttonClicks: [] };
+        allSettings.push(this.captured);
+      }
+      setName(n: string): this {
+        this.captured.name = n;
+        return this;
+      }
+      setDesc(d: string): this {
+        this.captured.desc = d;
+        return this;
+      }
+      addText(cb: (t: unknown) => void): this {
+        const api = {
+          setPlaceholder: (_p: string) => api,
+          setValue: (_v: string) => api,
+          onChange: (fn: (v: string) => void | Promise<void>) => {
+            this.captured.textOnChange = fn;
+            return api;
+          },
+        };
+        cb(api);
+        return this;
+      }
+      addToggle(cb: (t: unknown) => void): this {
+        const api = {
+          setValue: (_v: boolean) => api,
+          onChange: (fn: (v: boolean) => void | Promise<void>) => {
+            this.captured.toggleOnChange = fn;
+            return api;
+          },
+        };
+        cb(api);
+        return this;
+      }
+      addSlider(cb: (s: unknown) => void): this {
+        const api = {
+          setLimits: (_a: number, _b: number, _c: number) => api,
+          setValue: (_v: number) => api,
+          setDynamicTooltip: () => api,
+          onChange: (fn: (v: number) => void | Promise<void>) => {
+            this.captured.sliderOnChange = fn;
+            return api;
+          },
+        };
+        cb(api);
+        return this;
+      }
+      addDropdown(cb: (d: unknown) => void): this {
+        const api = {
+          addOption: (_value: string, _label: string) => api,
+          setValue: (_v: string) => api,
+          onChange: (fn: (v: string) => void | Promise<void>) => {
+            this.captured.dropdownOnChange = fn;
+            return api;
+          },
+        };
+        cb(api);
+        return this;
+      }
+      addButton(cb: (b: unknown) => void): this {
+        const buttonState: { label?: string; onClick: () => void | Promise<void> } = {
+          onClick: () => undefined,
+        };
+        const api = {
+          setButtonText: (t: string) => {
+            buttonState.label = t;
+            return api;
+          },
+          setCta: () => api,
+          setWarning: () => api,
+          setTooltip: (_t: string) => api,
+          onClick: (fn: () => void | Promise<void>) => {
+            buttonState.onClick = fn;
+            return api;
+          },
+        };
+        cb(api);
+        this.captured.buttonClicks.push(buttonState);
+        return this;
+      }
+    }
 
-	class MockSetting {
-		private captured: Captured;
+    const MockNotice = vi.fn();
 
-		constructor(_parent: unknown) {
-			this.captured = { name: '' };
-			allSettings.push(this.captured);
-		}
-
-		setName(n: string): this {
-			this.captured.name = n;
-			return this;
-		}
-
-		setDesc(_d: string): this {
-			return this;
-		}
-
-		addText(cb: (t: unknown) => void): this {
-			const api = {
-				setPlaceholder: (_p: string) => api,
-				setValue: (_v: string) => api,
-				onChange: (fn: (v: string) => void) => {
-					this.captured.textOnChange = fn;
-					return api;
-				},
-			};
-			cb(api);
-			return this;
-		}
-
-		addToggle(cb: (t: unknown) => void): this {
-			const api = {
-				setValue: (_v: boolean) => api,
-				onChange: (fn: (v: boolean) => void) => {
-					this.captured.toggleOnChange = fn;
-					return api;
-				},
-			};
-			cb(api);
-			return this;
-		}
-
-		addSlider(cb: (s: unknown) => void): this {
-			const api = {
-				setLimits: (_a: number, _b: number, _c: number) => api,
-				setValue: (_v: number) => api,
-				setDynamicTooltip: () => api,
-				onChange: (fn: (v: number) => void) => {
-					this.captured.sliderOnChange = fn;
-					return api;
-				},
-			};
-			cb(api);
-			return this;
-		}
-
-		addDropdown(cb: (d: unknown) => void): this {
-			const api = {
-				addOption: (_value: string, _label: string) => api,
-				setValue: (_v: string) => api,
-				onChange: (fn: (v: string) => void) => {
-					this.captured.dropdownOnChange = fn;
-					return api;
-				},
-			};
-			cb(api);
-			return this;
-		}
-
-		addButton(cb: (b: unknown) => void): this {
-			const api = {
-				setButtonText: (_t: string) => api,
-				setCta: () => api,
-				onClick: (fn: () => void | Promise<void>) => {
-					this.captured.buttonOnClick = fn;
-					return api;
-				},
-			};
-			cb(api);
-			return this;
-		}
-	}
-
-	const MockNotice = vi.fn();
-
-	function lastSettings(): Captured[] {
-		return allSettings;
-	}
-
-	return { MockPluginSettingTab, MockSetting, MockNotice, lastSettings };
-});
+    return {
+      MockPluginSettingTab,
+      MockSetting,
+      MockNotice,
+      capturedSettings: allSettings,
+    };
+  },
+);
 
 vi.mock('obsidian', () => ({
-	App: class {},
-	PluginSettingTab: MockPluginSettingTab,
-	Setting: MockSetting,
-	Notice: MockNotice,
-}));
-
-// Mock SilentStoneClient so we can control health() / me() responses.
-const { mockHealth, mockMe } = vi.hoisted(() => ({
-	mockHealth: vi.fn(),
-	mockMe: vi.fn(),
+  App: class {},
+  PluginSettingTab: MockPluginSettingTab,
+  Setting: MockSetting,
+  Notice: MockNotice,
 }));
 
 vi.mock('../api/client', () => ({
-	SilentStoneClient: class {
-		health = mockHealth;
-		me = mockMe;
-		constructor(_serverUrl: string, _token: string) {}
-	},
+  SilentStoneClient: class {
+    health = vi.fn().mockResolvedValue(true);
+    me = vi.fn().mockResolvedValue({ nickname: 'tester', role: 'member' });
+    constructor(_serverUrl: string, _token: string) {}
+  },
 }));
 
-import { SilentStoneSyncSettingTab } from '../settings';
+import { SilentStoneSyncSettingTab, formatRelativeTime, formatBytes } from '../settings';
+import type { PersistedSyncMetrics, SyncStatus, SyncStatusEvent } from '../types';
 
 // ── Test helpers ───────────────────────────────────
-type VaultResult =
-	| { kind: 'connected'; tier: string; usedBytes: number }
-	| { kind: 'unauthorized' }
-	| { kind: 'error'; message: string }
-	| { kind: 'not-configured' };
-
 type FakePlugin = {
-	settings: {
-		serverUrl: string;
-		nickname: string;
-		authToken: string;
-		folderId: string;
-		autoSync: boolean;
-		syncInterval: number;
-		syncOnStartup: boolean;
-		conflictStrategy: 'ask' | 'keep-local' | 'keep-server' | 'keep-both';
-		debugLogging: boolean;
-	};
-	saveSettings: ReturnType<typeof vi.fn>;
-	checkVaultConnection: ReturnType<typeof vi.fn<() => Promise<VaultResult>>>;
+  settings: {
+    serverUrl: string;
+    nickname: string;
+    authToken: string;
+    folderId: string;
+    autoSync: boolean;
+    syncInterval: number;
+    syncOnStartup: boolean;
+    conflictStrategy: 'ask' | 'keep-local' | 'keep-server' | 'keep-both';
+    debugLogging: boolean;
+    developerMode: boolean;
+  };
+  status: SyncStatus;
+  lastSyncMetrics: PersistedSyncMetrics;
+  vaultClient: { getStatus: ReturnType<typeof vi.fn> } | null;
+  saveSettings: ReturnType<typeof vi.fn>;
+  triggerVaultSync: ReturnType<typeof vi.fn>;
+  lockVault: ReturnType<typeof vi.fn>;
+  openDashboard: ReturnType<typeof vi.fn>;
+  addStatusListener: (l: (e: SyncStatusEvent) => void) => () => void;
+  // Holds the most recently registered status listener so tests can fire events.
+  __lastStatusListener?: (e: SyncStatusEvent) => void;
 };
 
 function makePlugin(overrides: Partial<FakePlugin> = {}): FakePlugin {
-	return {
-		settings: {
-			serverUrl: 'https://silentstone.one',
-			nickname: 'tester',
-			authToken: '',
-			folderId: 'my-vault',
-			autoSync: false,
-			syncInterval: 5,
-			syncOnStartup: false,
-			conflictStrategy: 'ask',
-			debugLogging: false,
-		},
-		saveSettings: vi.fn().mockResolvedValue(undefined),
-		checkVaultConnection: vi.fn().mockResolvedValue({ kind: 'not-configured' }),
-		...overrides,
-	};
+  const plugin: FakePlugin = {
+    settings: {
+      serverUrl: 'https://silentstone.one',
+      nickname: 'tester',
+      authToken: '',
+      folderId: 'my-vault',
+      autoSync: false,
+      syncInterval: 5,
+      syncOnStartup: false,
+      conflictStrategy: 'ask',
+      debugLogging: false,
+      developerMode: false,
+    },
+    status: 'idle',
+    lastSyncMetrics: {},
+    vaultClient: null,
+    saveSettings: vi.fn().mockResolvedValue(undefined),
+    triggerVaultSync: vi.fn().mockResolvedValue(undefined),
+    lockVault: vi.fn(),
+    openDashboard: vi.fn(),
+    addStatusListener: function (l: (e: SyncStatusEvent) => void) {
+      this.__lastStatusListener = l;
+      return () => {
+        if (this.__lastStatusListener === l) this.__lastStatusListener = undefined;
+      };
+    },
+    ...overrides,
+  };
+  return plugin;
 }
 
 function openTab(plugin: FakePlugin): SilentStoneSyncSettingTab {
-	const tab = new SilentStoneSyncSettingTab({} as never, plugin as never);
-	tab.display();
-	return tab;
+  const tab = new SilentStoneSyncSettingTab({} as never, plugin as never);
+  tab.display();
+  return tab;
 }
 
 function findByName(name: string) {
-	return lastSettings().find((s) => s.name === name);
+  return capturedSettings.find((s) => s.name === name);
+}
+
+function buttonByLabel(
+  setting: { buttonClicks: Array<{ label?: string; onClick: () => void | Promise<void> }> },
+  label: string,
+) {
+  return setting.buttonClicks.find((b) => b.label === label);
 }
 
 beforeEach(() => {
-	lastSettings().length = 0;
-	vi.clearAllMocks();
+  capturedSettings.length = 0;
+  vi.clearAllMocks();
 });
 
-// ── Smoke: display builds all expected rows ────────
-describe('SilentStoneSyncSettingTab — display()', () => {
-	it('creates all 9 Setting rows without throwing', () => {
-		const plugin = makePlugin();
-		openTab(plugin);
+// ── Default mode: section structure ───────────────
+describe('SilentStoneSyncSettingTab — default (non-developer) mode', () => {
+  it('renders Account, Vault, Sync, Conflict sections + Developer toggle without throwing', () => {
+    const plugin = makePlugin();
+    openTab(plugin);
 
-		const names = lastSettings().map((s) => s.name);
-		expect(names).toEqual([
-			'Server URL',
-			'Nickname',
-			'Test connection',
-			'Folder ID',
-			'Auto-sync',
-			'Sync interval',
-			'Sync on startup',
-			'Conflict resolution',
-			'Debug logging',
-		]);
-	});
+    const names = capturedSettings.map((s) => s.name);
+    // Expected rows in default mode: Nickname (account), Sync now (vault),
+    // Auto-sync, Sync interval, Sync on startup (sync), On conflict (conflict),
+    // Developer mode (toggle).
+    expect(names).toEqual([
+      'Nickname',
+      'Sync now',
+      'Auto-sync',
+      'Sync interval',
+      'Sync on startup',
+      'On conflict',
+      'Developer mode',
+    ]);
+  });
 
-	it('persists via plugin.saveSettings when a text field changes', async () => {
-		const plugin = makePlugin();
-		openTab(plugin);
+  it('does NOT render Server URL, Folder ID, or legacy Syncthing fields by default', () => {
+    const plugin = makePlugin();
+    openTab(plugin);
 
-		const serverUrlRow = findByName('Server URL');
-		expect(serverUrlRow?.textOnChange).toBeDefined();
-		await serverUrlRow?.textOnChange?.('https://new.example.com');
-
-		expect(plugin.saveSettings).toHaveBeenCalledOnce();
-		expect(plugin.settings.serverUrl).toBe('https://new.example.com');
-	});
-
-	it('persists via plugin.saveSettings when auto-sync toggles', async () => {
-		const plugin = makePlugin();
-		openTab(plugin);
-
-		const toggleRow = findByName('Auto-sync');
-		await toggleRow?.toggleOnChange?.(true);
-
-		expect(plugin.saveSettings).toHaveBeenCalledOnce();
-		expect(plugin.settings.autoSync).toBe(true);
-	});
+    expect(findByName('Server URL')).toBeUndefined();
+    expect(findByName('Folder ID')).toBeUndefined();
+    expect(findByName('Test Syncthing connection')).toBeUndefined();
+    expect(findByName('Debug logging')).toBeUndefined();
+  });
 });
 
-// ── Test-connection button: four-branch handler ────
-describe('SilentStoneSyncSettingTab — Test connection handler', () => {
-	it('shows "Cannot reach server" when health check fails', async () => {
-		const plugin = makePlugin();
-		mockHealth.mockResolvedValueOnce(false);
-		openTab(plugin);
+// ── Account section actions ───────────────────────
+describe('SilentStoneSyncSettingTab — Account section', () => {
+  it('Open dashboard button calls plugin.openDashboard', async () => {
+    const plugin = makePlugin();
+    openTab(plugin);
 
-		await findByName('Test connection')?.buttonOnClick?.();
+    const nicknameRow = findByName('Nickname');
+    const openBtn = buttonByLabel(nicknameRow!, 'Open dashboard');
+    expect(openBtn).toBeDefined();
+    await openBtn!.onClick();
 
-		expect(MockNotice).toHaveBeenCalledWith('Cannot reach server. Check the URL.');
-		expect(plugin.checkVaultConnection).not.toHaveBeenCalled();
-	});
+    expect(plugin.openDashboard).toHaveBeenCalledOnce();
+  });
 
-	it('shows vault-connected notice with tier and MB used', async () => {
-		const plugin = makePlugin({
-			checkVaultConnection: vi.fn().mockResolvedValue({
-				kind: 'connected',
-				tier: 'pro',
-				usedBytes: 2 * 1024 * 1024 + 500 * 1024,
-			}),
-		});
-		mockHealth.mockResolvedValueOnce(true);
-		openTab(plugin);
+  it('Lock vault button calls plugin.lockVault', async () => {
+    const plugin = makePlugin();
+    openTab(plugin);
 
-		await findByName('Test connection')?.buttonOnClick?.();
+    const nicknameRow = findByName('Nickname');
+    const lockBtn = buttonByLabel(nicknameRow!, 'Lock vault');
+    expect(lockBtn).toBeDefined();
+    await lockBtn!.onClick();
 
-		expect(MockNotice).toHaveBeenCalledWith(
-			expect.stringMatching(/Vault connected \(tier: pro, 2\.5 MB used\)/),
-		);
-	});
+    expect(plugin.lockVault).toHaveBeenCalledOnce();
+  });
 
-	it('shows "Vault token expired" notice on unauthorized', async () => {
-		const plugin = makePlugin({
-			checkVaultConnection: vi.fn().mockResolvedValue({ kind: 'unauthorized' }),
-		});
-		mockHealth.mockResolvedValueOnce(true);
-		openTab(plugin);
+  it('shows nickname in description when signed in', () => {
+    const plugin = makePlugin({
+      settings: { ...makePlugin().settings, nickname: 'alice' },
+    });
+    openTab(plugin);
+    const row = findByName('Nickname');
+    expect(row?.desc).toBe('alice');
+  });
 
-		await findByName('Test connection')?.buttonOnClick?.();
+  it('shows sign-in hint in description when nickname is empty', () => {
+    const plugin = makePlugin({
+      settings: { ...makePlugin().settings, nickname: '' },
+    });
+    openTab(plugin);
+    const row = findByName('Nickname');
+    expect(row?.desc).toContain('Not signed in');
+  });
+});
 
-		expect(MockNotice).toHaveBeenCalledWith(
-			expect.stringContaining('Vault token expired or revoked'),
-		);
-	});
+// ── Vault section: Sync Now button + status panel listener ────
+describe('SilentStoneSyncSettingTab — Vault section', () => {
+  it('Sync now button calls plugin.triggerVaultSync', async () => {
+    const plugin = makePlugin();
+    openTab(plugin);
 
-	it('shows vault error message on error kind', async () => {
-		const plugin = makePlugin({
-			checkVaultConnection: vi.fn().mockResolvedValue({
-				kind: 'error',
-				message: 'server 500',
-			}),
-		});
-		mockHealth.mockResolvedValueOnce(true);
-		openTab(plugin);
+    const syncRow = findByName('Sync now');
+    const syncBtn = buttonByLabel(syncRow!, 'Sync now');
+    expect(syncBtn).toBeDefined();
+    await syncBtn!.onClick();
 
-		await findByName('Test connection')?.buttonOnClick?.();
+    expect(plugin.triggerVaultSync).toHaveBeenCalledOnce();
+  });
 
-		expect(MockNotice).toHaveBeenCalledWith('Vault check failed: server 500');
-	});
+  it('subscribes to plugin status events and unsubscribes on hide()', () => {
+    const plugin = makePlugin();
+    const tab = openTab(plugin);
 
-	it('falls through to Syncthing me() when vault not-configured and authToken present', async () => {
-		const plugin = makePlugin({
-			settings: {
-				...makePlugin().settings,
-				authToken: 'syncthing-token',
-			},
-			checkVaultConnection: vi.fn().mockResolvedValue({ kind: 'not-configured' }),
-		});
-		mockHealth.mockResolvedValueOnce(true);
-		mockMe.mockResolvedValueOnce({ nickname: 'alice', role: 'admin' });
-		openTab(plugin);
+    expect(plugin.__lastStatusListener).toBeDefined();
+    tab.hide();
+    expect(plugin.__lastStatusListener).toBeUndefined();
+  });
 
-		await findByName('Test connection')?.buttonOnClick?.();
+  it('cleans up the previous listener when display() is called again', () => {
+    const plugin = makePlugin();
+    const tab = openTab(plugin);
+    const firstListener = plugin.__lastStatusListener;
 
-		expect(mockMe).toHaveBeenCalledOnce();
-		expect(MockNotice).toHaveBeenCalledWith('Connected as alice (admin)');
-	});
+    tab.display();
+    const secondListener = plugin.__lastStatusListener;
 
-	it('shows setup hint when vault not-configured and no authToken', async () => {
-		const plugin = makePlugin({
-			checkVaultConnection: vi.fn().mockResolvedValue({ kind: 'not-configured' }),
-		});
-		mockHealth.mockResolvedValueOnce(true);
-		openTab(plugin);
+    expect(firstListener).toBeDefined();
+    expect(secondListener).toBeDefined();
+    expect(secondListener).not.toBe(firstListener);
+  });
+});
 
-		await findByName('Test connection')?.buttonOnClick?.();
+// ── Developer mode toggle reveals advanced settings ──
+describe('SilentStoneSyncSettingTab — Developer mode toggle', () => {
+  it('reveals Server URL, Debug logging, Folder ID, and Test Syncthing connection when on', () => {
+    const plugin = makePlugin({
+      settings: { ...makePlugin().settings, developerMode: true },
+    });
+    openTab(plugin);
 
-		expect(mockMe).not.toHaveBeenCalled();
-		expect(MockNotice).toHaveBeenCalledWith(
-			expect.stringContaining('Run "Vault: first-time setup"'),
-		);
-	});
+    expect(findByName('Server URL')).toBeDefined();
+    expect(findByName('Debug logging')).toBeDefined();
+    expect(findByName('Folder ID')).toBeDefined();
+    expect(findByName('Test Syncthing connection')).toBeDefined();
+  });
+
+  it('persists the toggle change and re-renders', async () => {
+    const plugin = makePlugin();
+    openTab(plugin);
+
+    const devRow = findByName('Developer mode');
+    expect(devRow?.toggleOnChange).toBeDefined();
+
+    // Flipping the toggle persists + re-renders. We assert saveSettings was hit and
+    // the post-toggle setting reflects the new value.
+    await devRow!.toggleOnChange!(true);
+    expect(plugin.saveSettings).toHaveBeenCalledOnce();
+    expect(plugin.settings.developerMode).toBe(true);
+  });
+});
+
+// ── Conflict resolution dropdown ─────────────────
+describe('SilentStoneSyncSettingTab — Conflict resolution', () => {
+  it('persists the selection on change', async () => {
+    const plugin = makePlugin();
+    openTab(plugin);
+
+    const row = findByName('On conflict');
+    expect(row?.dropdownOnChange).toBeDefined();
+    await row!.dropdownOnChange!('keep-local');
+
+    expect(plugin.saveSettings).toHaveBeenCalledOnce();
+    expect(plugin.settings.conflictStrategy).toBe('keep-local');
+  });
+});
+
+// ── Pure helpers: formatRelativeTime + formatBytes ──
+describe('formatRelativeTime', () => {
+  it('returns "just now" for very recent timestamps', () => {
+    expect(formatRelativeTime(new Date().toISOString())).toBe('just now');
+  });
+
+  it('returns seconds for timestamps within the last minute', () => {
+    const ts = new Date(Date.now() - 30_000).toISOString();
+    expect(formatRelativeTime(ts)).toMatch(/^\d+s ago$/);
+  });
+
+  it('returns minutes for timestamps within the last hour', () => {
+    const ts = new Date(Date.now() - 5 * 60_000).toISOString();
+    expect(formatRelativeTime(ts)).toMatch(/^\d+m ago$/);
+  });
+
+  it('returns hours for timestamps within the last day', () => {
+    const ts = new Date(Date.now() - 3 * 3_600_000).toISOString();
+    expect(formatRelativeTime(ts)).toMatch(/^\d+h ago$/);
+  });
+
+  it('returns days for older timestamps', () => {
+    const ts = new Date(Date.now() - 5 * 86_400_000).toISOString();
+    expect(formatRelativeTime(ts)).toMatch(/^\d+d ago$/);
+  });
+
+  it('returns "unknown" for invalid timestamps', () => {
+    expect(formatRelativeTime('not-a-date')).toBe('unknown');
+  });
+});
+
+describe('formatBytes', () => {
+  it('formats sub-KB byte counts in B', () => {
+    expect(formatBytes(0)).toBe('0 B');
+    expect(formatBytes(512)).toBe('512 B');
+  });
+
+  it('formats KB / MB / GB with one or two decimals', () => {
+    expect(formatBytes(2_048)).toBe('2.0 KB');
+    expect(formatBytes(2_500_000)).toBe('2.4 MB');
+    expect(formatBytes(2_500_000_000)).toBe('2.33 GB');
+  });
+
+  it('returns "—" for invalid byte counts', () => {
+    expect(formatBytes(-1)).toBe('—');
+    expect(formatBytes(NaN)).toBe('—');
+  });
 });
