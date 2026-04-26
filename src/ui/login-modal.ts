@@ -1,5 +1,6 @@
 import { App, Modal, Setting } from 'obsidian';
 import type SilentStoneSyncPlugin from '../main';
+import { SetupModal } from './setup-modal';
 
 const DEFAULT_SERVER_URL = 'https://silentstone.one';
 const SIGNUP_URL = 'https://silentstone.one/signup';
@@ -133,7 +134,14 @@ export class LoginModal extends Modal {
 
       await this.plugin.unlockVaultWithPassword(this.password);
       this.close();
+      void this.plugin.triggerVaultSync();
     } catch (e) {
+      // No keys server-side → new vault. Route to setup instead of erroring.
+      if (e instanceof Error && e.message.includes('Vault keys not set up')) {
+        this.close();
+        new SetupModal(this.app, this.plugin).open();
+        return;
+      }
       this.showError(this.friendlyError(e));
       if (this.passwordInputEl) {
         this.passwordInputEl.value = '';

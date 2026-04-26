@@ -194,6 +194,12 @@ const { MockModal, MockSetting, lastSettings } = vi.hoisted(() => {
   return { MockModal, MockSetting, lastSettings };
 });
 
+vi.mock('../setup-modal', () => ({
+  SetupModal: vi.fn(function () {
+    return { open: vi.fn() };
+  }),
+}));
+
 vi.mock('obsidian', () => ({
   App: class {},
   Modal: MockModal,
@@ -201,12 +207,14 @@ vi.mock('obsidian', () => ({
 }));
 
 import { LoginModal } from '../login-modal';
+import { SetupModal } from '../setup-modal';
 
 // ── Test helpers ───────────────────────────────────
 type FakePlugin = {
   settings: { serverUrl: string; nickname: string; vaultAuthToken: string };
   saveSettings: ReturnType<typeof vi.fn>;
   unlockVaultWithPassword: ReturnType<typeof vi.fn>;
+  triggerVaultSync: ReturnType<typeof vi.fn>;
 };
 
 function makeFakePlugin(overrides: Partial<FakePlugin['settings']> = {}): FakePlugin {
@@ -219,6 +227,7 @@ function makeFakePlugin(overrides: Partial<FakePlugin['settings']> = {}): FakePl
     },
     saveSettings: vi.fn().mockResolvedValue(undefined),
     unlockVaultWithPassword: vi.fn().mockResolvedValue(undefined),
+    triggerVaultSync: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -430,7 +439,7 @@ describe('LoginModal — submit', () => {
     expect(findByText(modal.contentEl, 'Too many attempts')).toBe(true);
   });
 
-  it('maps "vault keys not set up" error to friendly first-time-setup prompt', async () => {
+  it('routes to first-time setup wizard when vault keys not set up server-side', async () => {
     const plugin = makeFakePlugin();
     plugin.unlockVaultWithPassword = vi
       .fn()
@@ -439,8 +448,9 @@ describe('LoginModal — submit', () => {
 
     await fillAndSubmit(modal, 'daisy', 'password');
 
-    expect(findByText(modal.contentEl, 'No vault yet')).toBe(true);
-    expect(findByText(modal.contentEl, 'Vault: first-time setup')).toBe(true);
+    expect(modal.close).toHaveBeenCalled();
+    expect(SetupModal).toHaveBeenCalledWith(modal.app, plugin);
+    expect(findByText(modal.contentEl, 'No vault yet')).toBe(false);
   });
 
   it('maps network errors to "Can\'t reach Silent Stone"', async () => {

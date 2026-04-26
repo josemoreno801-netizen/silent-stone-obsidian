@@ -84,6 +84,7 @@ export class UnlockModal extends Modal {
     try {
       await this.plugin.unlockVaultWithPassword(this.password);
       this.close();
+      void this.plugin.triggerVaultSync();
     } catch (e) {
       const raw = e instanceof Error ? e.message : String(e);
       const friendly = this.friendlyError(raw);
