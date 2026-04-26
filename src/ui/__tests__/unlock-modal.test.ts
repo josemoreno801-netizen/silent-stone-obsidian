@@ -185,6 +185,7 @@ import { UnlockModal } from '../unlock-modal';
 type FakePlugin = {
 	settings: { serverUrl: string; nickname: string };
 	unlockVaultWithPassword: ReturnType<typeof vi.fn>;
+	triggerVaultSync: ReturnType<typeof vi.fn>;
 };
 
 function makeFakePlugin(overrides: Partial<FakePlugin> = {}): FakePlugin {
@@ -194,6 +195,7 @@ function makeFakePlugin(overrides: Partial<FakePlugin> = {}): FakePlugin {
 			nickname: 'tester',
 		},
 		unlockVaultWithPassword: vi.fn().mockResolvedValue(undefined),
+		triggerVaultSync: vi.fn().mockResolvedValue(undefined),
 		...overrides,
 	};
 }

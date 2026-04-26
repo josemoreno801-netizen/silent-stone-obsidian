@@ -46,8 +46,8 @@ export default class SilentStoneSyncPlugin extends Plugin {
 
     // Commands
     this.addCommand({
-      id: 'sync-now',
-      name: 'Sync vault now',
+      id: 'legacy-syncthing-sync-now',
+      name: 'Legacy Syncthing: sync now',
       callback: () => this.triggerSync(),
     });
 
@@ -76,8 +76,8 @@ export default class SilentStoneSyncPlugin extends Plugin {
     });
 
     this.addCommand({
-      id: 'vault-sync-now',
-      name: 'Vault: sync now (E2E encrypted)',
+      id: 'sync-now',
+      name: 'Sync vault now',
       callback: () => this.triggerVaultSync(),
     });
 
@@ -89,7 +89,7 @@ export default class SilentStoneSyncPlugin extends Plugin {
 
     // Ribbon icon
     this.addRibbonIcon('cloud', 'Sync with Silent Stone', () => {
-      this.triggerSync();
+      this.triggerVaultSync();
     });
 
     // Initialize client if configured
@@ -104,15 +104,19 @@ export default class SilentStoneSyncPlugin extends Plugin {
     }
 
     // Rehydrate vault client from persisted Bearer token (v0.3).
-    // Master key is NOT persisted — the plugin lands in a "connected but
-    // locked" state. User must run "Vault: unlock with password" before any
-    // sync can happen. This is what lets the Test button and status bar
-    // report connectivity accurately across reloads.
+    // Master key is NOT persisted by design — plugin lands in a "connected
+    // but locked" state on every reload. Rehydrating the client (without
+    // a key) lets the Test button + status bar report accurate connectivity;
+    // auto-popping the unlock modal gives the user a one-click path to
+    // arming the runtime without hunting through the command palette.
     if (this.settings.serverUrl && this.settings.vaultAuthToken) {
       this.vaultClient = new VaultClient(
         this.settings.serverUrl,
         this.settings.vaultAuthToken,
       );
+      this.app.workspace.onLayoutReady(() => {
+        new UnlockModal(this.app, this).open();
+      });
     } else if (!this.settings.vaultAuthToken) {
       // First-run UX: no Bearer token persisted → auto-popup login modal so
       // the user isn't left hunting through the command palette. Deferred via

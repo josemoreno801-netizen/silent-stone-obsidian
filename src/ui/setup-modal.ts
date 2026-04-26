@@ -288,6 +288,7 @@ export class SetupModal extends Modal {
       this.recoveryPhrase = null;
       this.step = 3;
       this.renderStep();
+      void this.plugin.triggerVaultSync();
     } catch (e) {
       const raw = e instanceof Error ? e.message : String(e);
       this.showError(this.friendlyError(raw));

@@ -247,6 +247,7 @@ type FakePlugin = {
   settings: { serverUrl: string; nickname: string };
   generateVaultMaterial: ReturnType<typeof vi.fn>;
   commitVaultSetup: ReturnType<typeof vi.fn>;
+  triggerVaultSync: ReturnType<typeof vi.fn>;
 };
 
 const SAMPLE_PHRASE =
@@ -276,6 +277,7 @@ function makeFakePlugin(overrides: Partial<FakePlugin> = {}): FakePlugin {
       pendingSetup: makePendingSetup(),
     }),
     commitVaultSetup: vi.fn().mockResolvedValue(undefined),
+    triggerVaultSync: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
