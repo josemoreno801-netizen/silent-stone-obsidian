@@ -14,6 +14,8 @@ export interface SyncVault {
   create(path: string, data: ArrayBuffer): Promise<void>;
   modify(path: string, data: ArrayBuffer): Promise<void>;
   delete(path: string): Promise<void>;
+  /** Vault-relative paths of every syncable file currently on disk. */
+  listAll(): Promise<string[]>;
 }
 
 export interface QueueSource {
@@ -136,48 +138,72 @@ export class SyncEngine {
   async pushChanges(): Promise<void> {
     this.emit('syncing');
     try {
-      const events = this.watcher.getQueue();
-      if (events.length === 0) {
-        this.emit('idle');
-        return;
+      // Source of truth for "what should exist server-side": every file
+      // currently on disk in the vault. The watcher queue used to be the
+      // only signal here, which silently lost pre-existing files because
+      // the watcher only fires on events AFTER it starts listening.
+      const paths = await this.vault.listAll();
+      const localFiles = new Map<string, string>();
+      const localContents = new Map<string, ArrayBuffer>();
+      for (const path of paths) {
+        const data = await this.vault.readBinary(path);
+        localContents.set(path, data);
+        localFiles.set(path, await sha256Hex(data));
+      }
+
+      const { toUpload, toDelete: diffDeletes } = this.manifest.diff(localFiles);
+
+      // Watcher delete events still carry strong "user just deleted this"
+      // intent. Combined with knownSynced, they gate the deletion path:
+      // only delete blobs the user has either synced before OR explicitly
+      // removed in Obsidian. Anything else is treated as an orphan and
+      // preserved with a warning (see Issue #164 — tombstone tracking).
+      const watcherDeletes = new Set<string>();
+      for (const ev of this.watcher.getQueue()) {
+        if (ev.kind === 'delete') watcherDeletes.add(ev.path);
       }
 
       const pendingSets: Array<[string, ManifestEntry]> = [];
       const pendingDeletes: string[] = [];
 
-      for (const ev of events) {
-        if (ev.kind === 'upsert') {
-          if (!(await this.vault.exists(ev.path))) continue;
+      for (const path of toUpload) {
+        const plaintext = localContents.get(path)!;
+        const hash = localFiles.get(path)!;
+        const existing = this.manifest.getEntry(path);
+        const blobId = existing?.blobId ?? crypto.randomUUID();
+        const encrypted = await encryptBlob(new Uint8Array(plaintext), this.masterKey);
+        await this.client.putBlob(blobId, toArrayBuffer(encrypted));
 
-          const plaintext = await this.vault.readBinary(ev.path);
-          const hash = await sha256Hex(plaintext);
-          const existing = this.manifest.getEntry(ev.path);
-          if (existing && existing.hash === hash) continue;
+        const entry: ManifestEntry = {
+          blobId,
+          size: plaintext.byteLength,
+          hash,
+          modifiedAt: Date.now(),
+        };
+        this.manifest.setEntry(path, entry);
+        pendingSets.push([path, entry]);
+      }
 
-          const blobId = existing?.blobId ?? crypto.randomUUID();
-          const encrypted = await encryptBlob(new Uint8Array(plaintext), this.masterKey);
-          await this.client.putBlob(blobId, toArrayBuffer(encrypted));
-
-          const entry: ManifestEntry = {
-            blobId,
-            size: plaintext.byteLength,
-            hash,
-            modifiedAt: Date.now(),
-          };
-          this.manifest.setEntry(ev.path, entry);
-          pendingSets.push([ev.path, entry]);
-        } else if (ev.kind === 'delete') {
-          const existing = this.manifest.getEntry(ev.path);
-          if (!existing) continue;
-          await this.client.deleteBlob(existing.blobId);
-          this.manifest.deleteEntry(ev.path);
-          pendingDeletes.push(ev.path);
+      for (const path of diffDeletes) {
+        if (!this.knownSynced.has(path) && !watcherDeletes.has(path)) {
+          console.warn(
+            '[silent-stone] orphaned manifest entry preserved (not in knownSynced):',
+            path,
+          );
+          continue;
         }
+        const existing = this.manifest.getEntry(path);
+        if (!existing) continue;
+        await this.client.deleteBlob(existing.blobId);
+        this.manifest.deleteEntry(path);
+        pendingDeletes.push(path);
       }
 
       const mutated = pendingSets.length > 0 || pendingDeletes.length > 0;
       if (mutated) {
         await this.saveWithRetry(pendingSets, pendingDeletes);
+        this.knownSynced = new Set(this.manifest.getAllEntries().keys());
+        if (this.onStateUpdate) await this.onStateUpdate(new Set(this.knownSynced));
       }
 
       this.watcher.clearQueue();

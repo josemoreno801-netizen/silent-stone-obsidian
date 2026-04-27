@@ -73,6 +73,10 @@ class FakeVault implements SyncVault {
   async delete(path: string): Promise<void> {
     this.files.delete(path);
   }
+
+  async listAll(): Promise<string[]> {
+    return [...this.files.keys()];
+  }
 }
 
 class FakeQueue {
@@ -682,5 +686,108 @@ describe('SyncEngine.sync — final metrics event + observability ping', () => {
     expect(errorEvent).toBeDefined();
     expect(errorEvent!.errorMessage).toBeDefined();
     expect(typeof errorEvent!.errorMessage).toBe('string');
+  });
+});
+
+// ── pushChanges — trust-the-sync regression ────────
+// Three regression tests for the v0.1.7 bug: pushChanges() relied entirely on
+// watcher.getQueue(), so pre-existing vault files (created before watcher.start
+// ever ran) were never enumerated and never uploaded. The UI still reported
+// "Synced — Files: 0" and the server saw 0 B. After the fix, pushChanges
+// enumerates vault.listAll(), diffs against the manifest, and uploads the gap.
+describe('SyncEngine.pushChanges — pre-existing vault files (no watcher events)', () => {
+  it('uploads files that exist locally but are missing from the manifest, even with empty queue', async () => {
+    const h = await makeHarness();
+    const a = new TextEncoder().encode('alpha').buffer as ArrayBuffer;
+    const b = new TextEncoder().encode('beta').buffer as ArrayBuffer;
+    const c = new TextEncoder().encode('gamma').buffer as ArrayBuffer;
+    h.vault.files.set('a.md', a);
+    h.vault.files.set('b.md', b);
+    h.vault.files.set('c.md', c);
+    h.queue.events = []; // The smoking gun.
+
+    // 3 putBlob + 1 putManifest
+    mockRequestUrl.mockResolvedValueOnce(okJson({ ok: true, blobId: 'x', size: 5 }));
+    mockRequestUrl.mockResolvedValueOnce(okJson({ ok: true, blobId: 'x', size: 4 }));
+    mockRequestUrl.mockResolvedValueOnce(okJson({ ok: true, blobId: 'x', size: 5 }));
+    mockRequestUrl.mockResolvedValueOnce(okJson({ ok: true, sequenceNumber: 1 }));
+
+    await h.engine.pushChanges();
+
+    const blobCalls = mockRequestUrl.mock.calls.filter((call) => {
+      const args = call[0] as { method: string; url: string };
+      return args.method === 'PUT' && /\/api\/vault\/blobs\/[0-9a-f-]{36}$/.test(args.url);
+    });
+    expect(blobCalls).toHaveLength(3);
+
+    const manifestCall = mockRequestUrl.mock.calls.find((call) => {
+      const args = call[0] as { method: string; url: string };
+      return args.method === 'PUT' && args.url.endsWith('/api/vault/manifest');
+    });
+    expect(manifestCall).toBeDefined();
+
+    expect(h.manifest.getEntry('a.md')).toBeDefined();
+    expect(h.manifest.getEntry('b.md')).toBeDefined();
+    expect(h.manifest.getEntry('c.md')).toBeDefined();
+  });
+});
+
+describe('SyncEngine.pushChanges — deletion via diff with knownSynced guard', () => {
+  it('deletes blobs for files in manifest + knownSynced that are missing locally, with no watcher event', async () => {
+    const h = await makeHarness({ knownSynced: new Set(['a.md', 'b.md']) });
+
+    const a = new TextEncoder().encode('alpha').buffer as ArrayBuffer;
+    h.vault.files.set('a.md', a);
+
+    const aHash = await sha256Hex(a);
+    h.manifest.setEntry('a.md', {
+      blobId: '11111111-1111-4111-8111-111111111111',
+      size: a.byteLength,
+      hash: aHash,
+      modifiedAt: 1,
+    });
+    const bBlobId = '22222222-2222-4222-8222-222222222222';
+    h.manifest.setEntry('b.md', {
+      blobId: bBlobId,
+      size: 4,
+      hash: 'beta-hash',
+      modifiedAt: 1,
+    });
+    h.queue.events = []; // diff-driven, no watcher event
+
+    mockRequestUrl.mockResolvedValueOnce(okJson({ ok: true })); // deleteBlob b
+    mockRequestUrl.mockResolvedValueOnce(okJson({ ok: true, sequenceNumber: 1 })); // manifest
+
+    await h.engine.pushChanges();
+
+    const deleteCall = mockRequestUrl.mock.calls.find((call) => {
+      const args = call[0] as { method: string; url: string };
+      return args.method === 'DELETE' && args.url.endsWith(bBlobId);
+    });
+    expect(deleteCall).toBeDefined();
+    expect(h.manifest.getEntry('b.md')).toBeUndefined();
+    expect(h.manifest.getEntry('a.md')).toBeDefined();
+  });
+});
+
+describe('SyncEngine.pushChanges — orphan guard', () => {
+  it('does NOT delete a manifest entry that was never in knownSynced and has no watcher delete event', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const h = await makeHarness(); // empty knownSynced
+
+    h.manifest.setEntry('orphan.md', {
+      blobId: '33333333-3333-4333-8333-333333333333',
+      size: 10,
+      hash: 'orphan-hash',
+      modifiedAt: 1,
+    });
+    h.queue.events = []; // no watcher hint
+
+    await h.engine.pushChanges();
+
+    expect(mockRequestUrl).not.toHaveBeenCalled();
+    expect(h.manifest.getEntry('orphan.md')).toBeDefined();
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 });
