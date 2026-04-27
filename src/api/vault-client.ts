@@ -3,6 +3,7 @@ import type {
   VaultTokenRequest,
   VaultTokenResponse,
   VaultStatusResponse,
+  VaultStatusPatchRequest,
   ManifestPutResponse,
   BlobUploadResponse,
   BlobDeleteResponse,
@@ -129,6 +130,27 @@ export class VaultClient {
       url: `${this.baseUrl}/api/vault/status`,
       method: 'GET',
       headers: this.bearerHeaders(),
+    });
+    return resp.json as VaultStatusResponse;
+  }
+
+  /**
+   * Update the server's view of how many files are in the vault, and bump `lastSyncAt`.
+   *
+   * Called by the sync engine after a successful pull+push so the member dashboard and
+   * settings panel can show "47 files · just synced" without the plugin re-uploading the
+   * manifest. The server is zero-knowledge — `fileCount` is metadata, not content.
+   *
+   * Returns the full updated status payload so the caller can refresh local UI in one round-trip.
+   *
+   * @throws 401 on invalid Bearer; 400 if `fileCount` is negative or non-integer.
+   */
+  async patchStatus(req: VaultStatusPatchRequest): Promise<VaultStatusResponse> {
+    const resp = await requestUrl({
+      url: `${this.baseUrl}/api/vault/status`,
+      method: 'PATCH',
+      headers: this.jsonBearerHeaders(),
+      body: JSON.stringify(req),
     });
     return resp.json as VaultStatusResponse;
   }

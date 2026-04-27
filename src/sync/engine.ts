@@ -1,9 +1,8 @@
 import type { VaultClient } from '../api/vault-client';
 import { decryptBlob, encryptBlob } from '../crypto/cipher';
 import { ManifestConflictError, type ManifestEntry, type ManifestManager } from './manifest';
+import type { SyncStatusEvent } from '../types';
 import type { ChangeEvent } from './watcher';
-
-export type SyncStatus = 'idle' | 'syncing' | 'error';
 
 /**
  * Subset of Obsidian's Vault the sync engine needs.
@@ -28,7 +27,7 @@ export interface SyncEngineOpts {
   watcher: QueueSource;
   vault: SyncVault;
   masterKey: Uint8Array;
-  onStatusChange?: (status: SyncStatus) => void;
+  onStatusChange?: (event: SyncStatusEvent) => void;
   /** Paths known to have been synced on a previous successful sync. Guards against wiping unsynced local work. */
   knownSynced?: Set<string>;
   /** Called after every successful sync with the updated known-synced set so the caller can persist it. */
@@ -55,7 +54,7 @@ export class SyncEngine {
   private readonly watcher: QueueSource;
   private readonly vault: SyncVault;
   private readonly masterKey: Uint8Array;
-  private readonly onStatusChange?: (status: SyncStatus) => void;
+  private readonly onStatusChange?: (event: SyncStatusEvent) => void;
   private readonly onStateUpdate?: (knownSynced: Set<string>) => Promise<void> | void;
   private knownSynced: Set<string>;
 
@@ -73,6 +72,24 @@ export class SyncEngine {
   async sync(): Promise<void> {
     await this.pullChanges();
     await this.pushChanges();
+
+    // Both halves of the round-trip succeeded — surface metrics for the trust-the-sync UI
+    // (settings panel, status bar) and inform the server so the member dashboard can render
+    // the same numbers. Server is zero-knowledge for vault contents; fileCount + lastSyncAt
+    // are observability metadata, not material.
+    const fileCount = this.manifest.getAllEntries().size;
+    const lastSyncAt = new Date().toISOString();
+
+    // Best-effort observability ping. The sync itself already succeeded — a transient
+    // network blip or brief server hiccup must not turn a green sync into a red banner.
+    // Surface to console so the failure is investigable, but do not rethrow.
+    try {
+      await this.client.patchStatus({ fileCount });
+    } catch (err) {
+      console.warn('[silent-stone] PATCH /api/vault/status failed (non-fatal):', err);
+    }
+
+    this.emit('idle', { lastSyncAt, fileCount });
   }
 
   async pullChanges(): Promise<void> {
@@ -105,7 +122,7 @@ export class SyncEngine {
       if (this.onStateUpdate) await this.onStateUpdate(new Set(this.knownSynced));
       this.emit('idle');
     } catch (e) {
-      this.emit('error');
+      this.emit('error', { errorMessage: e instanceof Error ? e.message : 'Unknown error' });
       throw e;
     }
   }
@@ -166,7 +183,7 @@ export class SyncEngine {
       this.watcher.clearQueue();
       this.emit('idle');
     } catch (e) {
-      this.emit('error');
+      this.emit('error', { errorMessage: e instanceof Error ? e.message : 'Unknown error' });
       throw e;
     }
   }
@@ -187,7 +204,10 @@ export class SyncEngine {
     }
   }
 
-  private emit(status: SyncStatus): void {
-    this.onStatusChange?.(status);
+  private emit(
+    state: SyncStatusEvent['state'],
+    extras: Partial<Omit<SyncStatusEvent, 'state'>> = {},
+  ): void {
+    this.onStatusChange?.({ state, ...extras });
   }
 }

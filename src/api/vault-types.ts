@@ -28,8 +28,14 @@ export interface VaultStatusResponse {
   tier: string;
   lastSyncAt: string | null;
   manifestSeq: number;
+  /** Number of synced files reported by the plugin via PATCH /api/vault/status. 0 until first sync. */
+  fileCount: number;
   keysConfigured: boolean;
   suspended: boolean;
+}
+
+export interface VaultStatusPatchRequest {
+  fileCount: number;
 }
 
 // ── Manifest ───────────────────────────────────
