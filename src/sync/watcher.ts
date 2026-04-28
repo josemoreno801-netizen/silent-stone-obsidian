@@ -1,3 +1,5 @@
+import { compileIgnorePrefixes, isIgnored } from './ignore';
+
 /**
  * One unit of work for the sync engine.
  * Rename is decomposed into delete(oldPath) + upsert(newPath) at emit time.
@@ -31,7 +33,6 @@ export interface FileWatcherOptions {
   debounceMs?: number;
 }
 
-const DEFAULT_IGNORE_PATHS = ['.obsidian/**', '.trash/**', '.git/**'];
 const DEFAULT_DEBOUNCE_MS = 2000;
 
 /**
@@ -50,10 +51,7 @@ export class FileWatcher {
     private readonly vault: VaultEventSource,
     opts: FileWatcherOptions = {},
   ) {
-    const patterns = opts.ignorePaths ?? DEFAULT_IGNORE_PATHS;
-    this.ignorePrefixes = patterns
-      .filter((p) => p.endsWith('/**'))
-      .map((p) => p.slice(0, -3));
+    this.ignorePrefixes = compileIgnorePrefixes(opts.ignorePaths);
     this.debounceMs = opts.debounceMs ?? DEFAULT_DEBOUNCE_MS;
   }
 
@@ -97,6 +95,6 @@ export class FileWatcher {
   }
 
   private isIgnored(path: string): boolean {
-    return this.ignorePrefixes.some((prefix) => path.startsWith(prefix));
+    return isIgnored(path, this.ignorePrefixes);
   }
 }

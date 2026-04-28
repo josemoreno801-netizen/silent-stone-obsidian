@@ -19,6 +19,7 @@ import type { WrappedKey } from './crypto/types';
 import { ManifestManager } from './sync/manifest';
 import { FileWatcher } from './sync/watcher';
 import { SyncEngine } from './sync/engine';
+import { compileIgnorePrefixes, isIgnored } from './sync/ignore';
 import { LoginModal } from './ui/login-modal';
 import { SetupModal } from './ui/setup-modal';
 import { UnlockModal } from './ui/unlock-modal';
@@ -383,6 +384,8 @@ export default class SilentStoneSyncPlugin extends Plugin {
     });
     watcher.start();
 
+    const ignorePrefixes = compileIgnorePrefixes(this.settings.ignorePaths);
+
     const persisted = (await this.loadData()) ?? {};
     const knownSynced = new Set<string>(persisted[KNOWN_SYNCED_KEY] ?? []);
 
@@ -402,6 +405,11 @@ export default class SilentStoneSyncPlugin extends Plugin {
         delete: async (path) => {
           await this.app.vault.adapter.remove(path);
         },
+        listAll: async () =>
+          this.app.vault
+            .getFiles()
+            .map((f) => f.path)
+            .filter((p) => !isIgnored(p, ignorePrefixes)),
       },
       masterKey,
       knownSynced,
