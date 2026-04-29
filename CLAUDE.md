@@ -88,6 +88,8 @@ Two API clients, two product tracks (see `docs/API_ENDPOINTS.md`):
 
 ### Syncthing Track (`SilentStoneClient` in `api/client.ts`)
 
+> Track scheduled for removal — server-side Syncthing amputation in progress in the `silent-stone` repo (Phase 1 admin dashboard panel host merged 2026-04-29). The plugin's `SilentStoneClient` will become vestigial when `/api/folders` endpoints are removed. New plugin work should target the Vault Track only.
+
 | Endpoint | Purpose | Status |
 |----------|---------|--------|
 | `GET /api/auth/me` | Validate session | Exists |
@@ -109,6 +111,8 @@ Two API clients, two product tracks (see `docs/API_ENDPOINTS.md`):
 | `GET/PUT /api/vault/keys` | Retrieve/update encrypted key + Argon2 params | Exists |
 
 ## Submission Rules
+
+> Aspirational — these criteria must be met *before* submitting to the Obsidian community catalog. The plugin currently distributes via BRAT (see `docs/DEV.md` § 11); registry submission is post-v1.0 work.
 
 - ID: no "obsidian", no ending "plugin" → `silent-stone-sync`
 - Name: no "Obsidian", no ending "Plugin" → `Silent Stone Sync`
