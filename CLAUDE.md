@@ -84,7 +84,7 @@ src/
 
 ## Server API Dependencies
 
-Two API clients, two product tracks (see `docs/API_ENDPOINTS.md`):
+Two API clients, two product tracks (see `docs/DEV.md` § 7 + § 10 for plugin-side mapping):
 
 ### Syncthing Track (`SilentStoneClient` in `api/client.ts`)
 

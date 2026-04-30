@@ -231,16 +231,13 @@ Silent Stone's rate limiter (`rate-limit.ts`) has these limits relevant to the p
 
 ## File Structure
 
-See `obsidian-plugin/CLAUDE.md` for agent instructions and the full scaffold directory structure.
+See [`../CLAUDE.md`](../CLAUDE.md) for agent instructions and the full scaffold directory structure.
 
 ---
 
 ## Related Documents
 
-- [OBSIDIAN_PLUGIN_DEV.md](./OBSIDIAN_PLUGIN_DEV.md) — Plugin API reference
-- [API_ENDPOINTS.md](./API_ENDPOINTS.md) — Silent Stone server API reference
-- [GOALS.md](./GOALS.md) — Product milestones including M3
-- [SECURITY.md](./SECURITY.md) — Server security posture
+- [DEV.md](./DEV.md) — plugin developer reference (Vault API, crypto module, BRAT distribution).
 
 ### Diagrams
 

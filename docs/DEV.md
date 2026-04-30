@@ -411,7 +411,7 @@ export default [
 
 ## 7. Silent Stone API Mapping
 
-The plugin communicates with Silent Stone's REST API. See [API_ENDPOINTS.md](./API_ENDPOINTS.md) for full reference.
+The plugin communicates with Silent Stone's REST API. Endpoints are documented in the matching server route handlers in the private `silent-stone` repo.
 
 ### Auth (requires new Bearer token endpoint)
 
@@ -493,16 +493,16 @@ These gaps must be addressed before the plugin is fully functional:
 
 ---
 
-## 9. Crypto Module (`obsidian-plugin/src/crypto/`)
+## 9. Crypto Module (`src/crypto/`)
 
-**Status: v0.3 complete — 14 tests in `obsidian-plugin/src/crypto/__tests__/` (keys.test.ts, cipher.test.ts)**
+**Status: v0.3 complete — 14 tests in `src/crypto/__tests__/` (keys.test.ts, cipher.test.ts)**
 
-The plugin encrypts vault data locally before upload. All crypto lives in `obsidian-plugin/src/crypto/` and is covered by Vitest unit tests in `crypto/__tests__/`.
+The plugin encrypts vault data locally before upload. All crypto lives in `src/crypto/` and is covered by Vitest unit tests in `src/crypto/__tests__/`.
 
 ### File Layout
 
 ```
-obsidian-plugin/src/crypto/
+src/crypto/
 ├── types.ts        # MasterKeyMaterial, WrappedKey, RecoveryPhrase, Argon2Params
 ├── keys.ts         # Key generation, BIP39 recovery, Argon2id password wrapping
 ├── cipher.ts       # AES-256-GCM blob encrypt / decrypt
@@ -598,11 +598,11 @@ Server writes ciphertext to disk. Never sees key or plaintext.
 
 Download path reverses this: `GET /api/vault/blobs/:id` → `decryptBlob()` → write to vault.
 
-**Related:** See `docs/OBSIDIAN_PLUGIN_ARCHITECTURE.md` for the full sync engine design and [`docs/diagrams/sequence-plugin-crypto.md`](./diagrams/sequence-plugin-crypto.md) for a sequence diagram of the encrypt/decrypt flow.
+**Related:** See [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md) for the full sync engine design and [`docs/diagrams/sequence-plugin-crypto.md`](./diagrams/sequence-plugin-crypto.md) for a sequence diagram of the encrypt/decrypt flow.
 
 ---
 
-## 10. VaultClient API Reference (`obsidian-plugin/src/api/vault-client.ts`)
+## 10. VaultClient API Reference (`src/api/vault-client.ts`)
 
 **Status: v0.3 complete — closes #83. 248 lines, typed wrapper around all `/api/vault/*` endpoints.**
 
@@ -725,8 +725,8 @@ Update the Bearer token in place after re-authentication. Useful when a token ex
 
 ### Related Code
 
-- Response types are defined in `obsidian-plugin/src/api/vault-types.ts` (mirrored from `src/lib/vault/schemas.ts` on the server).
-- The matching server handlers live under `src/lib/vault/` (see `docs/API_ENDPOINTS.md` for the full route list).
+- Response types are defined in `src/api/vault-types.ts` (mirrored from server schemas in the private `silent-stone` repo).
+- The matching server handlers live in the private `silent-stone` repo under `src/lib/vault/`.
 - See [`docs/diagrams/sequence-plugin-sync.md`](./diagrams/sequence-plugin-sync.md) for the end-to-end sync sequence that calls these methods.
 
 ---
@@ -739,7 +739,7 @@ The plugin ships to testers via **BRAT** (Beta Reviewers Auto-update Tester) bef
 
 1. Install BRAT in Obsidian: **Settings → Community Plugins → Browse → search "BRAT" → Install → Enable**.
 2. Open BRAT settings: **Settings → Obsidian42 — BRAT → Add Beta Plugin**.
-3. Paste the repo URL: `https://github.com/josemoreno801-netizen/silent-stone`
+3. Paste the repo URL: `https://github.com/josemoreno801-netizen/silent-stone-obsidian`
 4. Click **Add Plugin**. BRAT pulls the latest release.
 5. Enable **Silent Stone Sync** in Community Plugins.
 6. New releases auto-update on Obsidian start. Force a check in BRAT: **Check for updates to all beta plugins**.
@@ -748,7 +748,7 @@ The plugin ships to testers via **BRAT** (Beta Reviewers Auto-update Tester) bef
 
 If BRAT misbehaves or a tester prefers manual control:
 
-1. Download `main.js`, `manifest.json`, `styles.css` from the [latest release](https://github.com/josemoreno801-netizen/silent-stone/releases) — files are at the release root, not zipped.
+1. Download `main.js`, `manifest.json`, `styles.css` from the [latest release](https://github.com/josemoreno801-netizen/silent-stone-obsidian/releases) — files are at the release root, not zipped.
 2. In your Obsidian vault folder, create `.obsidian/plugins/silent-stone-sync/` (the `.obsidian` folder is hidden — enable hidden files in your file manager).
 3. Drop all three files into that directory.
 4. In Obsidian: **Settings → Community Plugins → Reload** (refresh icon), then enable **Silent Stone Sync**.
@@ -759,7 +759,6 @@ If BRAT misbehaves or a tester prefers manual control:
 Releases are fully automated by `.github/workflows/plugin-release.yml`. The workflow fires on any tag matching `plugin-v*`, builds the plugin, and creates a GitHub Release with `main.js`, `manifest.json`, and `styles.css` attached at the release root (which is exactly what BRAT and the registry pattern-match).
 
 ```bash
-cd obsidian-plugin
 npm version patch       # or `minor` / `major`
                         #   - bumps package.json
                         #   - `version` lifecycle hook syncs manifest.json + versions.json
@@ -768,10 +767,10 @@ npm version patch       # or `minor` / `major`
                         #   - `postversion` hook pushes commit + tag
 # Workflow runs automatically. Watch with:
 gh run watch
-gh release view plugin-v0.1.2 --repo josemoreno801-netizen/silent-stone
+gh release view plugin-v0.1.2 --repo josemoreno801-netizen/silent-stone-obsidian
 ```
 
-**If you want to dry-run** (bump locally without pushing): edit `obsidian-plugin/package.json` and temporarily remove the `postversion` script, then re-add after verifying the bump.
+**If you want to dry-run** (bump locally without pushing): edit `package.json` and temporarily remove the `postversion` script, then re-add after verifying the bump.
 
 **If the workflow fails on the version-match check**: the tag and `manifest.json` versions don't agree. Usually means the `version` lifecycle hook didn't run. Fix `manifest.json` manually, force-push the tag (`git tag -f plugin-vX.Y.Z && git push -f origin plugin-vX.Y.Z`), and the workflow re-runs.
 
@@ -780,7 +779,6 @@ gh release view plugin-v0.1.2 --repo josemoreno801-netizen/silent-stone
 For day-to-day plugin development, symlink the build output into an actual Obsidian vault so changes are picked up live by `npm run dev`'s watch mode:
 
 ```bash
-cd obsidian-plugin
 npm install                                    # one-time
 npm run install-to-vault -- /path/to/vault     # creates symlinks in <vault>/.obsidian/plugins/silent-stone-sync/
 npm run dev                                    # watch mode — rebuilds main.js on every save
