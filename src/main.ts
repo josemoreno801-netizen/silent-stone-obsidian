@@ -21,6 +21,7 @@ import { FileWatcher } from './sync/watcher';
 import { SyncEngine } from './sync/engine';
 import { compileIgnorePrefixes, isIgnored } from './sync/ignore';
 import { LoginModal } from './ui/login-modal';
+import { LogoutModal } from './ui/logout-modal';
 import { SetupModal } from './ui/setup-modal';
 import { UnlockModal } from './ui/unlock-modal';
 
@@ -99,6 +100,12 @@ export default class SilentStoneSyncPlugin extends Plugin {
       id: 'vault-lock',
       name: 'Vault: lock (clear in-memory key)',
       callback: () => this.lockVault(),
+    });
+
+    this.addCommand({
+      id: 'vault-logout',
+      name: 'Vault: log out',
+      callback: () => new LogoutModal(this.app, this).open(),
     });
 
     this.addCommand({
@@ -456,6 +463,39 @@ export default class SilentStoneSyncPlugin extends Plugin {
     this.status = 'not-configured';
     this.updateStatusBar();
     new Notice('Vault locked.');
+  }
+
+  /**
+   * Full session exit. Clears the persisted Bearer token so the next plugin reload
+   * routes through LoginModal (a true re-login that mints a fresh token), not
+   * UnlockModal (which assumes the token is still valid).
+   *
+   * Server-side revocation is not available on the Vault track — tokens are
+   * stateless 90-day Bearers that expire naturally.
+   *
+   * Preserves KNOWN_SYNCED_KEY: that's a safety guard against destructive
+   * re-sync, and clearing it belongs to "Switch vault" (issue #9), not logout.
+   */
+  async logoutVault(): Promise<void> {
+    // In-memory teardown — mirrors lockVault, but no Notice (we show our own).
+    if (this.vaultKey) this.vaultKey.fill(0);
+    this.vaultClient = null;
+    this.vaultEngine = null;
+    this.vaultKey = null;
+    this.status = 'not-configured';
+    this.updateStatusBar();
+
+    // Persisted teardown. saveData is a full overwrite (see persistSyncMetrics),
+    // so we read-merge-write to preserve KNOWN_SYNCED_KEY.
+    this.settings.vaultAuthToken = '';
+    this.lastSyncMetrics = {};
+
+    const data = (await this.loadData()) ?? {};
+    Object.assign(data, this.settings);
+    delete data[SYNC_METRICS_KEY];
+    await this.saveData(data);
+
+    new Notice('Logged out. Use "Vault: log in" to reconnect.');
   }
 
   async triggerVaultSync(): Promise<void> {
