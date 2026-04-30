@@ -488,6 +488,7 @@ export default class SilentStoneSyncPlugin extends Plugin {
     // Persisted teardown. saveData is a full overwrite (see persistSyncMetrics),
     // so we read-merge-write to preserve KNOWN_SYNCED_KEY.
     this.settings.vaultAuthToken = '';
+    this.settings.nickname = '';
     this.lastSyncMetrics = {};
 
     const data = (await this.loadData()) ?? {};

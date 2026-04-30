@@ -97,7 +97,9 @@ export class SilentStoneSyncSettingTab extends PluginSettingTab {
           .setTooltip(
             "Sign out and clear your saved connection. You'll need your password and nickname to reconnect.",
           )
-          .onClick(() => new LogoutModal(this.plugin.app, this.plugin).open()),
+          .onClick(() =>
+            new LogoutModal(this.plugin.app, this.plugin, () => this.display()).open(),
+          ),
       );
   }
 

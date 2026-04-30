@@ -3,12 +3,14 @@ import type SilentStoneSyncPlugin from '../main';
 
 export class LogoutModal extends Modal {
   private plugin: SilentStoneSyncPlugin;
+  private onSuccess?: () => void;
   private submitting = false;
   private confirmBtn: HTMLButtonElement | null = null;
 
-  constructor(app: App, plugin: SilentStoneSyncPlugin) {
+  constructor(app: App, plugin: SilentStoneSyncPlugin, onSuccess?: () => void) {
     super(app);
     this.plugin = plugin;
+    this.onSuccess = onSuccess;
   }
 
   onOpen(): void {
@@ -50,6 +52,7 @@ export class LogoutModal extends Modal {
     }
     try {
       await this.plugin.logoutVault();
+      this.onSuccess?.();
       this.close();
     } finally {
       this.submitting = false;
