@@ -5,7 +5,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // production code exercises addText, addToggle, addSlider, addDropdown,
 // addButton (with multiple buttons per Setting), setWarning, setTooltip, and
 // setCta. The mock captures every change/click handler so tests can drive them.
-const { MockPluginSettingTab, MockSetting, MockNotice, capturedSettings } = vi.hoisted(
+const {
+  MockPluginSettingTab,
+  MockModal,
+  MockSetting,
+  MockNotice,
+  capturedSettings,
+} = vi.hoisted(
   () => {
     type FakeEl = {
       textContent: string;
@@ -78,6 +84,25 @@ const { MockPluginSettingTab, MockSetting, MockNotice, capturedSettings } = vi.h
       }
       hide(): void {
         // base class no-op; subclass may call super.hide()
+      }
+    }
+
+    // Minimal Modal stub. settings.ts imports LogoutModal which extends
+    // Modal — without this, the obsidian mock fails to satisfy that import.
+    // Tests do not exercise modal behaviour here (covered in logout-modal.test.ts);
+    // we only need the import chain to resolve.
+    class MockModal {
+      app: unknown;
+      contentEl: FakeEl;
+      constructor(app: unknown) {
+        this.app = app;
+        this.contentEl = createFakeEl();
+      }
+      open(): void {
+        (this as unknown as { onOpen?: () => void }).onOpen?.();
+      }
+      close(): void {
+        (this as unknown as { onClose?: () => void }).onClose?.();
       }
     }
 
@@ -170,6 +195,7 @@ const { MockPluginSettingTab, MockSetting, MockNotice, capturedSettings } = vi.h
 
     return {
       MockPluginSettingTab,
+      MockModal,
       MockSetting,
       MockNotice,
       capturedSettings: allSettings,
@@ -179,6 +205,7 @@ const { MockPluginSettingTab, MockSetting, MockNotice, capturedSettings } = vi.h
 
 vi.mock('obsidian', () => ({
   App: class {},
+  Modal: MockModal,
   PluginSettingTab: MockPluginSettingTab,
   Setting: MockSetting,
   Notice: MockNotice,
@@ -331,6 +358,18 @@ describe('SilentStoneSyncSettingTab — Account section', () => {
     await lockBtn!.onClick();
 
     expect(plugin.lockVault).toHaveBeenCalledOnce();
+  });
+
+  it('Log out button is rendered in the Account section', () => {
+    const plugin = makePlugin();
+    openTab(plugin);
+
+    const nicknameRow = findByName('Nickname');
+    const logoutBtn = buttonByLabel(nicknameRow!, 'Log out');
+    // Behaviour (opening LogoutModal, calling logoutVault) is covered by
+    // logout-modal.test.ts. Here we only lock placement: the button must
+    // exist in the Account row alongside Open Dashboard + Lock vault.
+    expect(logoutBtn).toBeDefined();
   });
 
   it('shows nickname in description when signed in', () => {

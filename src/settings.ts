@@ -1,6 +1,7 @@
 import { App, Notice, PluginSettingTab, Setting } from 'obsidian';
 import type SilentStoneSyncPlugin from './main';
 import { SilentStoneClient } from './api/client';
+import { LogoutModal } from './ui/logout-modal';
 
 /**
  * Settings tab for the Silent Stone Sync plugin.
@@ -88,6 +89,15 @@ export class SilentStoneSyncSettingTab extends PluginSettingTab {
           .setWarning()
           .setTooltip('Clear the in-memory key. Re-unlock with your password to resume sync.')
           .onClick(() => this.plugin.lockVault()),
+      )
+      .addButton((btn) =>
+        btn
+          .setButtonText('Log out')
+          .setWarning()
+          .setTooltip(
+            "Sign out and clear your saved connection. You'll need your password and nickname to reconnect.",
+          )
+          .onClick(() => new LogoutModal(this.plugin.app, this.plugin).open()),
       );
   }
 
