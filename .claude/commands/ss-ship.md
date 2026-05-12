@@ -3,7 +3,7 @@ description: Ship the ticket on the current branch — commit, flip Linear to Do
 disable-model-invocation: true
 ---
 
-# /ship — close the current ticket
+# /ss-ship — close the current ticket
 
 You are in the **plugin field session** (`silent-stone-obsidian`). The operator finished work on a ticket and wants to commit + close it. This command handles both **mission sub-issues** (the common case) and **one-off tickets** (when the operator works outside a mission).
 
@@ -26,7 +26,7 @@ git rev-parse --abbrev-ref HEAD
 Expected format: `josemoreno801/loc-NN-<slug>` (per the existing branch convention). Parse the `loc-NN` segment → `LOC-NN` (uppercase).
 
 **If the branch doesn't match the convention** (e.g. `main`, `chore/something`):
-- Print: `Branch <name> doesn't match the LOC-NN convention. Are you on the right branch? /ship needs a ticketed branch to know what to close.`
+- Print: `Branch <name> doesn't match the LOC-NN convention. Are you on the right branch? /ss-ship needs a ticketed branch to know what to close.`
 - Stop. The operator may have forgotten to `git checkout -b`.
 
 ### 2. Confirm the ticket exists and isn't already Done
@@ -36,13 +36,13 @@ get_issue("LOC-NN", includeRelations: true)
 ```
 
 - If 404 / not found: stop. Tell the operator the ID parsed from the branch doesn't exist in Linear.
-- If `state.type === "completed"`: stop. Tell the operator the ticket is already Done — they probably ran `/ship` twice. Don't double-close.
+- If `state.type === "completed"`: stop. Tell the operator the ticket is already Done — they probably ran `/ss-ship` twice. Don't double-close.
 
 ### 3. Determine mission context
 
 Check the returned ticket's `parent` field.
 
-- **Mission sub-issue**: `parent` is set. Confirm the parent's title starts with `Mission:` AND `parent.state.type !== "completed"` (the mission is still in flight). If both true, this `/ship` is a mission step.
+- **Mission sub-issue**: `parent` is set. Confirm the parent's title starts with `Mission:` AND `parent.state.type !== "completed"` (the mission is still in flight). If both true, this `/ss-ship` is a mission step.
 - **One-off ticket**: `parent` is null, OR `parent.title` doesn't start with `Mission:`, OR the mission parent is already Done. Treat as a standalone ship.
 
 ### 4. Propose the commit message
@@ -102,7 +102,7 @@ If step 3 determined this is a mission sub-issue:
 
 **Case A — mission still in flight** (some sub-issues are not Done):
 ```
-LOC-NN shipped. <X> of <N> done. /pull for next.
+LOC-NN shipped. <X> of <N> done. /ss-pull for next.
 ```
 
 **Case B — mission complete** (just-shipped sub-issue was the last Backlog/InProgress one):
@@ -125,7 +125,7 @@ If step 3 determined this is a one-off:
 LOC-NN shipped. (one-off — not part of a mission)
 ```
 
-End. No mission rollup, no parent comment. Don't refuse to ship — the operator can absolutely close a standalone ticket via `/ship`.
+End. No mission rollup, no parent comment. Don't refuse to ship — the operator can absolutely close a standalone ticket via `/ss-ship`.
 
 ## Output discipline
 
@@ -139,7 +139,7 @@ End. No mission rollup, no parent comment. Don't refuse to ship — the operator
 - **Flipping Linear to Done before the commit succeeds.** Order is non-negotiable.
 - **Bypassing pre-commit hooks** with `--no-verify` unless the operator asks for it. Hook failures mean something is wrong; investigate.
 - **Amending the previous commit** to recover from a failed pre-commit hook. The failed commit didn't land — amending would modify the wrong commit. Create a new commit.
-- **Refusing to ship one-off tickets.** The plan explicitly requires `/ship` to handle non-mission shipping. Don't gate-keep.
+- **Refusing to ship one-off tickets.** The plan explicitly requires `/ss-ship` to handle non-mission shipping. Don't gate-keep.
 - **Posting a wrap comment on a half-finished mission.** Wrap only fires when the LAST sub-issue ships. Re-count after the state transition.
 - **Skipping the `get_issue` verify** after any Linear write. Silent-failure landmine.
 

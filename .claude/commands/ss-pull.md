@@ -3,7 +3,7 @@ description: Claim the next sub-issue from this repo's active mission — flips 
 disable-model-invocation: true
 ---
 
-# /pull — claim the next sub-issue
+# /ss-pull — claim the next sub-issue
 
 You are in the **plugin field session** (`silent-stone-obsidian`). HQ planned a mission as a Linear parent issue with reparented sub-issues. This command claims the next one for you to work on.
 
@@ -21,7 +21,7 @@ This command writes to Linear (one state transition). It is user-invoked only.
 
 **If zero active missions:** stop. Print:
 ```
-No active plugin mission. Run /mission at HQ first.
+No active plugin mission. Run /ss-mission at HQ first.
 ```
 
 **If multiple active missions:** stop. Print all of them with URLs and tell the user to close one before pulling — discipline check.
@@ -35,7 +35,7 @@ No active plugin mission. Run /mission at HQ first.
 
 **If zero `Backlog` sub-issues:**
 - If any sub-issue is still `In Progress`, print: `Already in flight: LOC-NN. Finish or unblock that one before pulling another.`
-- If all are `Done`, print: `Mission complete — close it with /ship on the last sub-issue, or run /mission-status.` Stop.
+- If all are `Done`, print: `Mission complete — close it with /ss-ship on the last sub-issue, or run /ss-mission-status.` Stop.
 
 ### 3. Flip the sub-issue to In Progress
 
@@ -89,12 +89,12 @@ End. No closing fluff.
 ## Anti-patterns (never do)
 
 - **Auto-running `git checkout`.** Print only.
-- **Pulling a sub-issue from a different repo's mission.** This command is plugin-scoped. The web equivalent lives in `silent-stone/.claude/commands/pull.md`.
-- **Pulling while another sub-issue is In Progress.** WIP-1 discipline at the mission level. Finish the current one (via `/ship`) first.
+- **Pulling a sub-issue from a different repo's mission.** This command is plugin-scoped. The web equivalent lives in `silent-stone/.claude/commands/ss-pull.md`.
+- **Pulling while another sub-issue is In Progress.** WIP-1 discipline at the mission level. Finish the current one (via `/ss-ship`) first.
 - **Skipping the `get_issue` verify** after the state transition. Linear MCP writes can lie.
 
 ## What this command does NOT do
 
 - Run `git checkout` for you.
 - Open files. The operator drives implementation; this command just hands off.
-- Touch any ticket not in the active mission. One-off tickets are handled directly via `/ship` after the operator picks them manually.
+- Touch any ticket not in the active mission. One-off tickets are handled directly via `/ss-ship` after the operator picks them manually.

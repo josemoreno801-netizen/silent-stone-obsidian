@@ -2,7 +2,7 @@
 description: Show where this repo's active mission stands — sub-issue checklist with [x]/[~]/[ ] markers and a one-line verdict
 ---
 
-# /mission-status — where the field session stands
+# /ss-mission-status — where the field session stands
 
 You are in the **plugin field session** (`silent-stone-obsidian`). This command prints a read-only checklist of the active mission's sub-issues so the operator knows what's done, what's in flight, and what's left.
 
@@ -20,7 +20,7 @@ You are in the **plugin field session** (`silent-stone-obsidian`). This command 
 
 **If zero active missions:**
 ```
-No active plugin mission. Run /mission at HQ to plan one.
+No active plugin mission. Run /ss-mission at HQ to plan one.
 ```
 Stop.
 
@@ -51,11 +51,11 @@ Sort sub-issues by priority (Urgent first), then by ticket ID ascending when pri
 
 Pick the first matching condition:
 
-- **All sub-issues Done** → `Mission ready to close. /ship the last one already.`  
-  *(If you see this state, something's odd — `/ship` should have auto-closed the parent when the last sub-issue shipped. Surface it.)*
+- **All sub-issues Done** → `Mission ready to close. /ss-ship the last one already.`  
+  *(If you see this state, something's odd — `/ss-ship` should have auto-closed the parent when the last sub-issue shipped. Surface it.)*
 - **One sub-issue In Progress, the rest Done** → `<N-1> of <N> shipped. Finish LOC-NN to close the mission.`
-- **One sub-issue In Progress, others Backlog** → `LOC-NN in flight. /ship when ready, then /pull next.`
-- **All Backlog, none In Progress** → `Nothing claimed yet. /pull to start.`
+- **One sub-issue In Progress, others Backlog** → `LOC-NN in flight. /ss-ship when ready, then /ss-pull next.`
+- **All Backlog, none In Progress** → `Nothing claimed yet. /ss-pull to start.`
 - **Mixed (multiple in progress)** → `WIP-N (<list of in-progress LOC-NNs>). WIP-1 discipline says finish one before the next.`
 
 End. No closing fluff.
@@ -64,10 +64,10 @@ End. No closing fluff.
 
 - Use the actual current date if you need to reference time (e.g. mission age), never placeholders.
 - The checklist is markdown so it renders cleanly in any terminal that pretty-prints. No tables, no emoji.
-- Don't echo the parent issue's description (the mission briefing) — that's `/pull`'s job. `/mission-status` is a glance, not a re-brief.
+- Don't echo the parent issue's description (the mission briefing) — that's `/ss-pull`'s job. `/ss-mission-status` is a glance, not a re-brief.
 
 ## Anti-patterns (never do)
 
-- **Writing to Linear.** This command is read-only. If the operator wants to act on what they see, they invoke `/pull` or `/ship`.
-- **Crossing repos.** Plugin field session shows the plugin mission only. Web mission status lives in `silent-stone/.claude/commands/mission-status.md`.
+- **Writing to Linear.** This command is read-only. If the operator wants to act on what they see, they invoke `/ss-pull` or `/ss-ship`.
+- **Crossing repos.** Plugin field session shows the plugin mission only. Web mission status lives in `silent-stone/.claude/commands/ss-mission-status.md`.
 - **Padding verdicts.** Pick one condition and print it. Don't append "consider also…" — the verdict carries the read.
