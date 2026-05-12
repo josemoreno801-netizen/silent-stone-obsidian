@@ -9,3 +9,10 @@ data.json
 
 # npm debug
 npm-debug.log*
+
+# Claude Code — track commands/hooks (team tooling), ignore per-user state
+.claude/settings.local.json
+.claude/agent-memory-local/
+.claude/scheduled_tasks.lock
+.claude/remember/
+.claude/worktrees/
