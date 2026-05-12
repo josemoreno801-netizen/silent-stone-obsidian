@@ -11,7 +11,12 @@ vi.mock('obsidian', () => ({
 import { VaultClient } from '../../api/vault-client';
 import { encryptBlob } from '../../crypto/cipher';
 import { ManifestManager } from '../manifest';
-import { SyncEngine, type SyncVault } from '../engine';
+import {
+  SyncEngine,
+  type ConflictInfo,
+  type ConflictResolution,
+  type SyncVault,
+} from '../engine';
 import type { ChangeEvent } from '../watcher';
 import type { ManifestEntry } from '../manifest';
 import type { SyncStatusEvent } from '../../types';
@@ -96,11 +101,13 @@ interface Harness {
   vault: FakeVault;
   client: VaultClient;
   statuses: string[];
-  savedKnownSynced: Set<string>[];
+  savedKnownSynced: Map<string, string>[];
+  conflictCalls: ConflictInfo[];
 }
 
 interface HarnessOpts {
-  knownSynced?: Set<string>;
+  knownSynced?: Map<string, string>;
+  onConflict?: (info: ConflictInfo) => ConflictResolution | Promise<ConflictResolution>;
 }
 
 /** Assemble a fresh engine with empty manifest (404 on first getManifest). */
@@ -115,7 +122,8 @@ async function makeHarness(opts: HarnessOpts = {}): Promise<Harness> {
   const queue = new FakeQueue();
   const vault = new FakeVault();
   const statuses: string[] = [];
-  const savedKnownSynced: Set<string>[] = [];
+  const savedKnownSynced: Map<string, string>[] = [];
+  const conflictCalls: ConflictInfo[] = [];
   const engine = new SyncEngine({
     client,
     manifest,
@@ -125,10 +133,16 @@ async function makeHarness(opts: HarnessOpts = {}): Promise<Harness> {
     onStatusChange: (e) => statuses.push(e.state),
     knownSynced: opts.knownSynced,
     onStateUpdate: async (ks) => {
-      savedKnownSynced.push(new Set(ks));
+      savedKnownSynced.push(new Map(ks));
     },
+    onConflict: opts.onConflict
+      ? (info) => {
+          conflictCalls.push(info);
+          return opts.onConflict!(info);
+        }
+      : undefined,
   });
-  return { engine, manifest, queue, vault, client, statuses, savedKnownSynced };
+  return { engine, manifest, queue, vault, client, statuses, savedKnownSynced, conflictCalls };
 }
 
 beforeEach(() => {
@@ -391,11 +405,15 @@ describe('SyncEngine.pullChanges — new files from server', () => {
     expect(new TextDecoder().decode(local)).toBe('server file');
   });
 
-  it('uses vault.modify when the local file already exists and hash differs', async () => {
-    const h = await makeHarness();
-    const blobId = '66666666-6666-4666-8666-666666666666';
+  it('uses vault.modify when the local file already exists and hash differs (one-sided server change)', async () => {
+    // Setup: local hash === lastKnown === oldPlaintext hash. Server moved to newPlaintext.
+    // This is case 4 in the divergence matrix — server moved, local didn't → download.
     const newPlaintext = new TextEncoder().encode('new version').buffer as ArrayBuffer;
     const oldPlaintext = new TextEncoder().encode('old version').buffer as ArrayBuffer;
+    const oldHash = await sha256Hex(oldPlaintext);
+
+    const h = await makeHarness({ knownSynced: new Map([['doc.md', oldHash]]) });
+    const blobId = '66666666-6666-4666-8666-666666666666';
     h.vault.files.set('doc.md', oldPlaintext);
 
     const encryptedBlob = await encryptBlob(new Uint8Array(newPlaintext), MASTER_KEY);
@@ -453,9 +471,11 @@ describe('SyncEngine.pullChanges — new files from server', () => {
 
 describe('SyncEngine.pullChanges — deletions with known-synced guard', () => {
   it('deletes local file that was previously synced but no longer in manifest', async () => {
-    const h = await makeHarness({ knownSynced: new Set(['old.md']) });
-    const plaintext = new TextEncoder().encode('to delete').buffer as ArrayBuffer;
-    h.vault.files.set('old.md', plaintext);
+    const oldPlaintext = new TextEncoder().encode('to delete').buffer as ArrayBuffer;
+    const h = await makeHarness({
+      knownSynced: new Map([['old.md', await sha256Hex(oldPlaintext)]]),
+    });
+    h.vault.files.set('old.md', oldPlaintext);
 
     const encManifest = await encryptManifest(
       { version: 1, entries: {} },
@@ -516,7 +536,10 @@ describe('SyncEngine.pullChanges — deletions with known-synced guard', () => {
 
     expect(h.savedKnownSynced.length).toBeGreaterThan(0);
     const latest = h.savedKnownSynced[h.savedKnownSynced.length - 1];
-    expect([...latest].sort()).toEqual(['a.md', 'b.md']);
+    expect([...latest.keys()].sort()).toEqual(['a.md', 'b.md']);
+    // And the values are the file's plaintext hash, not just paths.
+    expect(latest.get('a.md')).toBe(await sha256Hex(plaintext));
+    expect(latest.get('b.md')).toBe(await sha256Hex(plaintext));
   });
 });
 
@@ -734,12 +757,19 @@ describe('SyncEngine.pushChanges — pre-existing vault files (no watcher events
 
 describe('SyncEngine.pushChanges — deletion via diff with knownSynced guard', () => {
   it('deletes blobs for files in manifest + knownSynced that are missing locally, with no watcher event', async () => {
-    const h = await makeHarness({ knownSynced: new Set(['a.md', 'b.md']) });
-
     const a = new TextEncoder().encode('alpha').buffer as ArrayBuffer;
+    const aHash = await sha256Hex(a);
+    // knownSynced maps each previously-synced path to its last-known plaintext hash.
+    // For b.md we don't have the bytes anymore — use the same placeholder hash that the
+    // manifest entry below uses, so it's consistent with the per-path-hash contract.
+    const h = await makeHarness({
+      knownSynced: new Map([
+        ['a.md', aHash],
+        ['b.md', 'beta-hash'],
+      ]),
+    });
     h.vault.files.set('a.md', a);
 
-    const aHash = await sha256Hex(a);
     h.manifest.setEntry('a.md', {
       blobId: '11111111-1111-4111-8111-111111111111',
       size: a.byteLength,
@@ -789,5 +819,313 @@ describe('SyncEngine.pushChanges — orphan guard', () => {
     expect(h.manifest.getEntry('orphan.md')).toBeDefined();
     expect(warnSpy).toHaveBeenCalled();
     warnSpy.mockRestore();
+  });
+});
+
+// ── pullChanges — divergence-based conflict detection (LOC-47) ────
+// Three reference points decide which case fires:
+//   localHash  — sha256 of the file on disk right now
+//   serverHash — manifestEntry.hash (server side after decryption)
+//   lastKnown  — knownSynced.get(path) — what was on disk last successful sync
+//
+// Conflict (case 5) iff localHash !== serverHash AND lastKnown !== localHash AND
+// lastKnown !== serverHash. Anything else is a one-sided change or "in sync."
+describe('SyncEngine.pullChanges — divergence-based conflict detection', () => {
+  /** Build an encrypted blob + manifest containing `path → entry`. */
+  async function buildServerState(
+    path: string,
+    plaintext: ArrayBuffer,
+    blobId: string,
+  ): Promise<{ entry: ManifestEntry; blobBuf: ArrayBuffer; encManifest: ArrayBuffer }> {
+    const encryptedBlob = await encryptBlob(new Uint8Array(plaintext), MASTER_KEY);
+    const blobBuf = new ArrayBuffer(encryptedBlob.byteLength);
+    new Uint8Array(blobBuf).set(encryptedBlob);
+    const entry: ManifestEntry = {
+      blobId,
+      size: plaintext.byteLength,
+      hash: await sha256Hex(plaintext),
+      modifiedAt: 99,
+    };
+    const encManifest = await encryptManifest(
+      { version: 1, entries: { [path]: entry } },
+      MASTER_KEY,
+    );
+    return { entry, blobBuf, encManifest };
+  }
+
+  it('case 3 — one-sided local change: lastKnown matches server, local moved → preserves local, no download', async () => {
+    const serverPlaintext = new TextEncoder().encode('shared').buffer as ArrayBuffer;
+    const localPlaintext = new TextEncoder().encode('local edits').buffer as ArrayBuffer;
+    const serverHash = await sha256Hex(serverPlaintext);
+    const localHash = await sha256Hex(localPlaintext);
+
+    // lastKnown === serverHash → user edited locally since last sync. Server unchanged.
+    const h = await makeHarness({ knownSynced: new Map([['notes.md', serverHash]]) });
+    h.vault.files.set('notes.md', localPlaintext);
+
+    const { encManifest } = await buildServerState(
+      'notes.md',
+      serverPlaintext,
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    );
+    mockRequestUrl.mockResolvedValueOnce(
+      okBinary(encManifest, { 'x-sequence-number': '1' }),
+    );
+
+    await h.engine.pullChanges();
+
+    // Local untouched — bytes still match local edit.
+    const stillLocal = await h.vault.readBinary('notes.md');
+    expect(new TextDecoder().decode(stillLocal)).toBe('local edits');
+    // Only the manifest GET — no blob download.
+    expect(mockRequestUrl).toHaveBeenCalledTimes(1);
+    // No conflict handler call.
+    expect(h.conflictCalls).toHaveLength(0);
+    // Persisted knownSynced now reflects the actual local hash.
+    const latest = h.savedKnownSynced.at(-1)!;
+    expect(latest.get('notes.md')).toBe(localHash);
+  });
+
+  it('case 4 — one-sided server change: lastKnown matches local, server moved → downloads', async () => {
+    const oldPlaintext = new TextEncoder().encode('original').buffer as ArrayBuffer;
+    const newServerPlaintext = new TextEncoder().encode('server-updated').buffer as ArrayBuffer;
+    const oldHash = await sha256Hex(oldPlaintext);
+
+    // lastKnown === localHash (oldHash) → local unchanged. Server moved to new content.
+    const h = await makeHarness({ knownSynced: new Map([['notes.md', oldHash]]) });
+    h.vault.files.set('notes.md', oldPlaintext);
+
+    const { blobBuf, encManifest } = await buildServerState(
+      'notes.md',
+      newServerPlaintext,
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    );
+    mockRequestUrl.mockResolvedValueOnce(
+      okBinary(encManifest, { 'x-sequence-number': '2' }),
+    );
+    mockRequestUrl.mockResolvedValueOnce(okBinary(blobBuf));
+
+    await h.engine.pullChanges();
+
+    const after = await h.vault.readBinary('notes.md');
+    expect(new TextDecoder().decode(after)).toBe('server-updated');
+    expect(h.conflictCalls).toHaveLength(0);
+  });
+
+  it('case 5 — both sides changed: conflict handler fires with all three hashes', async () => {
+    const baselinePlaintext = new TextEncoder().encode('baseline v1').buffer as ArrayBuffer;
+    const localPlaintext = new TextEncoder().encode('local changes').buffer as ArrayBuffer;
+    const serverPlaintext = new TextEncoder().encode('server changes').buffer as ArrayBuffer;
+    const baselineHash = await sha256Hex(baselinePlaintext);
+    const localHash = await sha256Hex(localPlaintext);
+    const serverHash = await sha256Hex(serverPlaintext);
+
+    const onConflict = vi.fn<(info: ConflictInfo) => ConflictResolution>(() => 'keep-local');
+    const h = await makeHarness({
+      knownSynced: new Map([['notes.md', baselineHash]]),
+      onConflict,
+    });
+    h.vault.files.set('notes.md', localPlaintext);
+
+    const { blobBuf, encManifest } = await buildServerState(
+      'notes.md',
+      serverPlaintext,
+      'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    );
+    mockRequestUrl.mockResolvedValueOnce(
+      okBinary(encManifest, { 'x-sequence-number': '3' }),
+    );
+    mockRequestUrl.mockResolvedValueOnce(okBinary(blobBuf));
+
+    await h.engine.pullChanges();
+
+    expect(onConflict).toHaveBeenCalledOnce();
+    const info = h.conflictCalls[0];
+    expect(info.path).toBe('notes.md');
+    expect(info.localHash).toBe(localHash);
+    expect(info.serverHash).toBe(serverHash);
+    expect(info.lastKnownHash).toBe(baselineHash);
+    // localContent and serverContent should round-trip the plaintexts.
+    expect(new TextDecoder().decode(info.localContent)).toBe('local changes');
+    expect(new TextDecoder().decode(info.serverContent)).toBe('server changes');
+  });
+
+  it('case 5 resolution: keep-local → preserves local bytes, knownSynced tracks localHash', async () => {
+    const baseline = new TextEncoder().encode('baseline').buffer as ArrayBuffer;
+    const local = new TextEncoder().encode('local').buffer as ArrayBuffer;
+    const server = new TextEncoder().encode('server').buffer as ArrayBuffer;
+    const localHash = await sha256Hex(local);
+
+    const h = await makeHarness({
+      knownSynced: new Map([['n.md', await sha256Hex(baseline)]]),
+      onConflict: () => 'keep-local',
+    });
+    h.vault.files.set('n.md', local);
+
+    const { blobBuf, encManifest } = await buildServerState(
+      'n.md',
+      server,
+      'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+    );
+    mockRequestUrl.mockResolvedValueOnce(
+      okBinary(encManifest, { 'x-sequence-number': '4' }),
+    );
+    mockRequestUrl.mockResolvedValueOnce(okBinary(blobBuf));
+
+    await h.engine.pullChanges();
+
+    expect(new TextDecoder().decode(await h.vault.readBinary('n.md'))).toBe('local');
+    expect(h.savedKnownSynced.at(-1)!.get('n.md')).toBe(localHash);
+  });
+
+  it('case 5 resolution: keep-server → vault.modify with server bytes, knownSynced tracks serverHash', async () => {
+    const baseline = new TextEncoder().encode('baseline').buffer as ArrayBuffer;
+    const local = new TextEncoder().encode('local').buffer as ArrayBuffer;
+    const server = new TextEncoder().encode('server').buffer as ArrayBuffer;
+    const serverHash = await sha256Hex(server);
+
+    const h = await makeHarness({
+      knownSynced: new Map([['n.md', await sha256Hex(baseline)]]),
+      onConflict: () => 'keep-server',
+    });
+    h.vault.files.set('n.md', local);
+
+    const { blobBuf, encManifest } = await buildServerState(
+      'n.md',
+      server,
+      'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+    );
+    mockRequestUrl.mockResolvedValueOnce(
+      okBinary(encManifest, { 'x-sequence-number': '5' }),
+    );
+    mockRequestUrl.mockResolvedValueOnce(okBinary(blobBuf));
+
+    await h.engine.pullChanges();
+
+    expect(new TextDecoder().decode(await h.vault.readBinary('n.md'))).toBe('server');
+    expect(h.savedKnownSynced.at(-1)!.get('n.md')).toBe(serverHash);
+  });
+
+  it('case 5 resolution: keep-both → server saved at suffixed path, local untouched', async () => {
+    const baseline = new TextEncoder().encode('baseline').buffer as ArrayBuffer;
+    const local = new TextEncoder().encode('local').buffer as ArrayBuffer;
+    const server = new TextEncoder().encode('server').buffer as ArrayBuffer;
+
+    const h = await makeHarness({
+      knownSynced: new Map([['n.md', await sha256Hex(baseline)]]),
+      onConflict: () => 'keep-both',
+    });
+    h.vault.files.set('n.md', local);
+
+    const { blobBuf, encManifest } = await buildServerState(
+      'n.md',
+      server,
+      'ffffffff-ffff-4fff-8fff-ffffffffffff',
+    );
+    mockRequestUrl.mockResolvedValueOnce(
+      okBinary(encManifest, { 'x-sequence-number': '6' }),
+    );
+    mockRequestUrl.mockResolvedValueOnce(okBinary(blobBuf));
+
+    await h.engine.pullChanges();
+
+    // Local untouched.
+    expect(new TextDecoder().decode(await h.vault.readBinary('n.md'))).toBe('local');
+    // Some other path was created that contains the server bytes and has the
+    // conflict-copy marker in its name.
+    const created = [...h.vault.files.keys()].filter((p) => p !== 'n.md');
+    expect(created.length).toBe(1);
+    expect(created[0]).toMatch(/conflict copy/);
+    expect(new TextDecoder().decode(await h.vault.readBinary(created[0]))).toBe('server');
+  });
+
+  it('migration sentinel (empty-string value) → preserves local, records actual local hash, no conflict prompt', async () => {
+    // Simulates the legacy persisted shape after main.ts hydrates it: every previously
+    // known path is in the map but the value is `''` (no real history). The first round
+    // after the upgrade must NOT false-positive into a conflict.
+    const localPlaintext = new TextEncoder().encode('local-only edits').buffer as ArrayBuffer;
+    const serverPlaintext = new TextEncoder().encode('different content').buffer as ArrayBuffer;
+    const localHash = await sha256Hex(localPlaintext);
+
+    const onConflict = vi.fn<(info: ConflictInfo) => ConflictResolution>(() => 'keep-server');
+    const h = await makeHarness({
+      knownSynced: new Map([['legacy.md', '']]), // migration sentinel
+      onConflict,
+    });
+    h.vault.files.set('legacy.md', localPlaintext);
+
+    const { encManifest } = await buildServerState(
+      'legacy.md',
+      serverPlaintext,
+      'aaaaaaaa-aaaa-4aaa-8aaa-bbbbbbbbbbbb',
+    );
+    mockRequestUrl.mockResolvedValueOnce(
+      okBinary(encManifest, { 'x-sequence-number': '7' }),
+    );
+
+    await h.engine.pullChanges();
+
+    // Local preserved despite differing from server (sentinel ≠ confirmed conflict).
+    expect(new TextDecoder().decode(await h.vault.readBinary('legacy.md'))).toBe(
+      'local-only edits',
+    );
+    expect(onConflict).not.toHaveBeenCalled();
+    // Hash now real — next round will have a proper anchor.
+    expect(h.savedKnownSynced.at(-1)!.get('legacy.md')).toBe(localHash);
+    // Only the manifest GET was made — no blob fetch.
+    expect(mockRequestUrl).toHaveBeenCalledTimes(1);
+  });
+
+  it('no handler wired + real conflict → defaults to keep-server with a console.warn', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const baseline = new TextEncoder().encode('baseline').buffer as ArrayBuffer;
+    const local = new TextEncoder().encode('local').buffer as ArrayBuffer;
+    const server = new TextEncoder().encode('server').buffer as ArrayBuffer;
+
+    const h = await makeHarness({
+      knownSynced: new Map([['n.md', await sha256Hex(baseline)]]),
+      // onConflict deliberately omitted
+    });
+    h.vault.files.set('n.md', local);
+
+    const { blobBuf, encManifest } = await buildServerState(
+      'n.md',
+      server,
+      'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+    );
+    mockRequestUrl.mockResolvedValueOnce(
+      okBinary(encManifest, { 'x-sequence-number': '8' }),
+    );
+    mockRequestUrl.mockResolvedValueOnce(okBinary(blobBuf));
+
+    await h.engine.pullChanges();
+
+    expect(new TextDecoder().decode(await h.vault.readBinary('n.md'))).toBe('server');
+    expect(warnSpy).toHaveBeenCalled();
+    const warnArg = warnSpy.mock.calls[0]?.[0] as string;
+    expect(warnArg).toMatch(/conflict on n\.md/);
+    warnSpy.mockRestore();
+  });
+});
+
+// ── pushChanges — knownSynced records per-file hash (LOC-47) ────
+describe('SyncEngine.pushChanges — knownSynced carries per-file hash', () => {
+  it('after upload, persisted knownSynced maps each pushed path to its plaintext sha256', async () => {
+    const h = await makeHarness();
+    const plaintextA = new TextEncoder().encode('alpha').buffer as ArrayBuffer;
+    const plaintextB = new TextEncoder().encode('beta').buffer as ArrayBuffer;
+    h.vault.files.set('a.md', plaintextA);
+    h.vault.files.set('b.md', plaintextB);
+    h.queue.events = [{ kind: 'upsert', path: 'a.md' }];
+
+    mockRequestUrl.mockResolvedValueOnce(okJson({ ok: true, blobId: 'x', size: 5 }));
+    mockRequestUrl.mockResolvedValueOnce(okJson({ ok: true, blobId: 'x', size: 4 }));
+    mockRequestUrl.mockResolvedValueOnce(okJson({ ok: true, sequenceNumber: 1 }));
+
+    await h.engine.pushChanges();
+
+    const latest = h.savedKnownSynced.at(-1)!;
+    expect(latest.get('a.md')).toBe(await sha256Hex(plaintextA));
+    expect(latest.get('b.md')).toBe(await sha256Hex(plaintextB));
   });
 });
