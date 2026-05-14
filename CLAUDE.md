@@ -139,3 +139,13 @@ This repo (`silent-stone-obsidian`) is the **public, open-source** Obsidian plug
 - **Why it's public**: Silent Stone promises end-to-end encryption — "your server never sees plaintext." This repo is the proof. Customers, security researchers, and skeptics can audit `src/crypto/` to verify encryption happens client-side.
 - **Related private repo**: The server that serves `/api/vault/*` endpoints is proprietary (handles billing, admin dashboard, infrastructure). Its privacy does not weaken the encryption claim — the plugin's crypto is what matters, and it's fully visible here.
 - **Issues and roadmap**: Open a GitHub issue here for any plugin-specific bug, feature, or crypto concern. Server-coupled work is tracked in the private repo.
+
+## Auto-load on session start
+
+When a Claude Code session boots in this project (the repo root OR any worktree under `.claude/worktrees/`), check the current working directory for `WORKTREE_PROMPT.md` or `MISSION_PROMPT.md`. If either file exists:
+
+1. Read its contents.
+2. Treat the contents as the operator's initial prompt and execute on it as if they had typed it.
+3. Delete the file (`rm WORKTREE_PROMPT.md` or `rm MISSION_PROMPT.md`) after reading — these are transient handshake files, not persistent docs.
+
+`/ss-pull` writes `WORKTREE_PROMPT.md` when it spawns a worktree session. `/ss-mission` (at HQ) writes `MISSION_PROMPT.md` when it spawns a field session. Both are part of the tmux-window spawn flow: HQ → field, field → worktree, prompt delivered via file because `claude --tmux <prompt>` doesn't honor positional prompt args.
