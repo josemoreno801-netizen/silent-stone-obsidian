@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo \"$CLAUDE_FILE_PATH\" | grep -qE '\\.tsx?$' || exit 0; ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd); TMP=$(mktemp); (cd \"$ROOT\" && npx vitest related \"$CLAUDE_FILE_PATH\" --run --reporter=default) > \"$TMP\" 2>&1; RC=$?; grep -E '^[[:space:]]*(Test Files|Tests|FAIL)' \"$TMP\" | head -10; [ $RC -ne 0 ] && echo \"(vitest exit $RC; log: $TMP)\"; exit 0"
+          }
+        ]
+      }
+    ]
+  }
+}
