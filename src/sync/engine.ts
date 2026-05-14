@@ -23,6 +23,22 @@ export interface QueueSource {
   clearQueue(): void;
 }
 
+export type ConflictResolution = 'keep-local' | 'keep-server' | 'keep-both';
+
+export interface ConflictInfo {
+  path: string;
+  localHash: string;
+  serverHash: string;
+  /** Hash on disk the last time this file was successfully synced. Empty string when migrating from the legacy paths-only persisted shape (no reliable history). */
+  lastKnownHash: string;
+  localContent: ArrayBuffer;
+  serverContent: ArrayBuffer;
+  /** Manifest entry's modifiedAt for the server side. */
+  serverModifiedAt: number;
+}
+
+export type ConflictHandler = (info: ConflictInfo) => Promise<ConflictResolution> | ConflictResolution;
+
 export interface SyncEngineOpts {
   client: VaultClient;
   manifest: ManifestManager;
@@ -30,10 +46,23 @@ export interface SyncEngineOpts {
   vault: SyncVault;
   masterKey: Uint8Array;
   onStatusChange?: (event: SyncStatusEvent) => void;
-  /** Paths known to have been synced on a previous successful sync. Guards against wiping unsynced local work. */
-  knownSynced?: Set<string>;
-  /** Called after every successful sync with the updated known-synced set so the caller can persist it. */
-  onStateUpdate?: (knownSynced: Set<string>) => Promise<void> | void;
+  /**
+   * Last-known plaintext hash per synced path. Lets the engine distinguish a real
+   * divergence (both sides changed since last sync) from a one-sided change.
+   * Empty-string values are migration sentinels (legacy state had paths only, no
+   * hashes); the engine treats them as "preserve local, record the actual hash
+   * next round" so an upgrade can't false-positive into a conflict storm.
+   */
+  knownSynced?: Map<string, string>;
+  /** Called after every successful sync with the updated known-synced map so the caller can persist it. */
+  onStateUpdate?: (knownSynced: Map<string, string>) => Promise<void> | void;
+  /**
+   * Called when a real divergence is detected (local and server both changed since
+   * last known sync). Resolution drives what the engine does with the file. If not
+   * provided, the engine defaults to 'keep-server' with a console warning — same
+   * effective behavior as pre-LOC-47 silent clobber but now flagged.
+   */
+  onConflict?: ConflictHandler;
 }
 
 async function sha256Hex(data: ArrayBuffer): Promise<string> {
@@ -50,6 +79,17 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return buf;
 }
 
+/** Build the keep-both conflict-copy path: `notes/foo.md` → `notes/foo (conflict copy <iso-date>).md`. */
+function makeConflictCopyPath(path: string): string {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const dot = path.lastIndexOf('.');
+  const slash = path.lastIndexOf('/');
+  if (dot > slash && dot > 0) {
+    return `${path.slice(0, dot)} (conflict copy ${stamp})${path.slice(dot)}`;
+  }
+  return `${path} (conflict copy ${stamp})`;
+}
+
 export class SyncEngine {
   private readonly client: VaultClient;
   private readonly manifest: ManifestManager;
@@ -57,8 +97,9 @@ export class SyncEngine {
   private readonly vault: SyncVault;
   private readonly masterKey: Uint8Array;
   private readonly onStatusChange?: (event: SyncStatusEvent) => void;
-  private readonly onStateUpdate?: (knownSynced: Set<string>) => Promise<void> | void;
-  private knownSynced: Set<string>;
+  private readonly onStateUpdate?: (knownSynced: Map<string, string>) => Promise<void> | void;
+  private readonly onConflict?: ConflictHandler;
+  private knownSynced: Map<string, string>;
 
   constructor(opts: SyncEngineOpts) {
     this.client = opts.client;
@@ -68,7 +109,8 @@ export class SyncEngine {
     this.masterKey = opts.masterKey;
     this.onStatusChange = opts.onStatusChange;
     this.onStateUpdate = opts.onStateUpdate;
-    this.knownSynced = new Set(opts.knownSynced ?? []);
+    this.onConflict = opts.onConflict;
+    this.knownSynced = new Map(opts.knownSynced ?? []);
   }
 
   async sync(): Promise<void> {
@@ -100,33 +142,108 @@ export class SyncEngine {
       await this.manifest.load();
       const entries = this.manifest.getAllEntries();
 
+      const nextKnown = new Map<string, string>();
+
       for (const [path, entry] of entries) {
         const localExists = await this.vault.exists(path);
-        if (localExists) {
-          const local = await this.vault.readBinary(path);
-          const localHash = await sha256Hex(local);
-          if (localHash === entry.hash) continue;
-          const plaintext = await this.downloadAndDecrypt(entry);
-          await this.vault.modify(path, plaintext);
-        } else {
+
+        if (!localExists) {
+          // Server-only file → pull it down.
           const plaintext = await this.downloadAndDecrypt(entry);
           await this.vault.create(path, plaintext);
+          nextKnown.set(path, entry.hash);
+          continue;
+        }
+
+        const local = await this.vault.readBinary(path);
+        const localHash = await sha256Hex(local);
+
+        // Case 1: in sync.
+        if (localHash === entry.hash) {
+          nextKnown.set(path, entry.hash);
+          continue;
+        }
+
+        // Differs. Consult the three-point comparison to decide why.
+        const lastKnown = this.knownSynced.get(path);
+
+        // Case 2: no reliable history (never synced, or migration sentinel).
+        // Preserve local — record its actual hash so the next round has a real anchor.
+        // pushChanges() will upload the local copy if the user wants it pushed.
+        if (lastKnown === undefined || lastKnown === '') {
+          nextKnown.set(path, localHash);
+          continue;
+        }
+
+        // Case 3: local moved, server didn't → leave local alone, push will handle it.
+        if (lastKnown === entry.hash) {
+          nextKnown.set(path, localHash);
+          continue;
+        }
+
+        // Case 4: server moved, local didn't → download.
+        if (lastKnown === localHash) {
+          const plaintext = await this.downloadAndDecrypt(entry);
+          await this.vault.modify(path, plaintext);
+          nextKnown.set(path, entry.hash);
+          continue;
+        }
+
+        // Case 5: real divergence — both sides moved. Ask the handler.
+        const serverPlaintext = await this.downloadAndDecrypt(entry);
+        const resolution = await this.resolveConflict({
+          path,
+          localHash,
+          serverHash: entry.hash,
+          lastKnownHash: lastKnown,
+          localContent: local,
+          serverContent: serverPlaintext,
+          serverModifiedAt: entry.modifiedAt,
+        });
+
+        if (resolution === 'keep-local') {
+          nextKnown.set(path, localHash);
+        } else if (resolution === 'keep-server') {
+          await this.vault.modify(path, serverPlaintext);
+          nextKnown.set(path, entry.hash);
+        } else {
+          // keep-both: server copy saved alongside local with a suffix; local stays put.
+          const conflictPath = makeConflictCopyPath(path);
+          await this.vault.create(conflictPath, serverPlaintext);
+          nextKnown.set(path, localHash);
+          nextKnown.set(conflictPath, entry.hash);
         }
       }
 
-      for (const path of this.knownSynced) {
+      // Deletions: a path that was known-synced and is missing from the server manifest
+      // means the user (or another device) deleted it remotely. Mirror locally.
+      for (const path of this.knownSynced.keys()) {
         if (!entries.has(path) && (await this.vault.exists(path))) {
           await this.vault.delete(path);
         }
       }
 
-      this.knownSynced = new Set(entries.keys());
-      if (this.onStateUpdate) await this.onStateUpdate(new Set(this.knownSynced));
+      this.knownSynced = nextKnown;
+      if (this.onStateUpdate) await this.onStateUpdate(new Map(this.knownSynced));
       this.emit('idle');
     } catch (e) {
       this.emit('error', { errorMessage: e instanceof Error ? e.message : 'Unknown error' });
       throw e;
     }
+  }
+
+  private async resolveConflict(info: ConflictInfo): Promise<ConflictResolution> {
+    if (this.onConflict) {
+      return this.onConflict(info);
+    }
+    // No handler wired → fall back to server-wins, but flag it so the operator can
+    // tell it apart from the pre-LOC-47 silent-clobber bug.
+    console.warn(
+      `[silent-stone] conflict on ${info.path}: no handler wired, defaulting to keep-server. ` +
+        `local=${info.localHash.slice(0, 8)} server=${info.serverHash.slice(0, 8)} ` +
+        `lastKnown=${info.lastKnownHash.slice(0, 8)}`,
+    );
+    return 'keep-server';
   }
 
   private async downloadAndDecrypt(entry: ManifestEntry): Promise<ArrayBuffer> {
@@ -202,8 +319,12 @@ export class SyncEngine {
       const mutated = pendingSets.length > 0 || pendingDeletes.length > 0;
       if (mutated) {
         await this.saveWithRetry(pendingSets, pendingDeletes);
-        this.knownSynced = new Set(this.manifest.getAllEntries().keys());
-        if (this.onStateUpdate) await this.onStateUpdate(new Set(this.knownSynced));
+        // Rebuild knownSynced from the post-push manifest, preserving the per-path hash so
+        // the next sync round has a real anchor for divergence detection.
+        const next = new Map<string, string>();
+        for (const [p, e] of this.manifest.getAllEntries()) next.set(p, e.hash);
+        this.knownSynced = next;
+        if (this.onStateUpdate) await this.onStateUpdate(new Map(this.knownSynced));
       }
 
       this.watcher.clearQueue();

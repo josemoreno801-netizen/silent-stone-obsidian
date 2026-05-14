@@ -18,7 +18,8 @@ import {
 import type { WrappedKey } from './crypto/types';
 import { ManifestManager } from './sync/manifest';
 import { FileWatcher } from './sync/watcher';
-import { SyncEngine } from './sync/engine';
+import { SyncEngine, type ConflictHandler, type ConflictResolution } from './sync/engine';
+import { hydrateKnownSynced } from './sync/known-synced';
 import { compileIgnorePrefixes, isIgnored } from './sync/ignore';
 import { LoginModal } from './ui/login-modal';
 import { LogoutModal } from './ui/logout-modal';
@@ -394,7 +395,7 @@ export default class SilentStoneSyncPlugin extends Plugin {
     const ignorePrefixes = compileIgnorePrefixes(this.settings.ignorePaths);
 
     const persisted = (await this.loadData()) ?? {};
-    const knownSynced = new Set<string>(persisted[KNOWN_SYNCED_KEY] ?? []);
+    const knownSynced = hydrateKnownSynced(persisted[KNOWN_SYNCED_KEY]);
 
     const engine = new SyncEngine({
       client: vaultClient,
@@ -420,6 +421,7 @@ export default class SilentStoneSyncPlugin extends Plugin {
       },
       masterKey,
       knownSynced,
+      onConflict: this.makeConflictHandler(),
       onStatusChange: (event) => {
         this.status =
           event.state === 'idle' ? 'idle' : event.state === 'syncing' ? 'syncing' : 'error';
@@ -443,7 +445,7 @@ export default class SilentStoneSyncPlugin extends Plugin {
       },
       onStateUpdate: async (ks) => {
         const data = (await this.loadData()) ?? {};
-        data[KNOWN_SYNCED_KEY] = [...ks];
+        data[KNOWN_SYNCED_KEY] = Object.fromEntries(ks);
         await this.saveData(data);
       },
     });
@@ -453,6 +455,28 @@ export default class SilentStoneSyncPlugin extends Plugin {
     this.vaultKey = masterKey;
     this.status = 'idle';
     this.updateStatusBar();
+  }
+
+  /**
+   * Build the conflict handler the engine consults when a real divergence is detected.
+   * Honors `settings.conflictStrategy`:
+   *   - `keep-local` / `keep-server` / `keep-both` → return directly.
+   *   - `ask` → fall back to `keep-server` until LOC-12 lands the modal. A Notice
+   *     surfaces the fallback so the user is aware their `'ask'` preference is being
+   *     deferred (rather than silently picking server).
+   */
+  private makeConflictHandler(): ConflictHandler {
+    return (info): ConflictResolution => {
+      const strategy = this.settings.conflictStrategy;
+      if (strategy === 'keep-local' || strategy === 'keep-server' || strategy === 'keep-both') {
+        return strategy;
+      }
+      new Notice(
+        `Conflict on ${info.path}: keeping server copy (interactive prompt coming in a future update).`,
+        6000,
+      );
+      return 'keep-server';
+    };
   }
 
   lockVault(): void {
