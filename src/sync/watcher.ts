@@ -31,6 +31,12 @@ export interface FileWatcherOptions {
   ignorePaths?: string[];
   /** Debounce window in ms. Defaults to 2000. */
   debounceMs?: number;
+  /**
+   * Called every time a path's per-path debounce expires and the event lands
+   * in the settled queue. Used by the auto-sync controller to schedule syncs;
+   * never invoked for ignored paths or for events still in the pending window.
+   */
+  onSettle?: () => void;
 }
 
 const DEFAULT_DEBOUNCE_MS = 2000;
@@ -42,6 +48,7 @@ const DEFAULT_DEBOUNCE_MS = 2000;
 export class FileWatcher {
   private readonly ignorePrefixes: string[];
   private readonly debounceMs: number;
+  private readonly onSettle?: () => void;
   private pending: Map<string, { event: ChangeEvent; timer: ReturnType<typeof setTimeout> }> =
     new Map();
   private queue: Map<string, ChangeEvent> = new Map();
@@ -53,6 +60,7 @@ export class FileWatcher {
   ) {
     this.ignorePrefixes = compileIgnorePrefixes(opts.ignorePaths);
     this.debounceMs = opts.debounceMs ?? DEFAULT_DEBOUNCE_MS;
+    this.onSettle = opts.onSettle;
   }
 
   start(): void {
@@ -89,6 +97,7 @@ export class FileWatcher {
     const timer = setTimeout(() => {
       this.queue.set(event.path, event);
       this.pending.delete(event.path);
+      this.onSettle?.();
     }, this.debounceMs);
 
     this.pending.set(event.path, { event, timer });

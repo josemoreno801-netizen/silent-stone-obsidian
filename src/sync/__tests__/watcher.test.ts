@@ -208,3 +208,61 @@ describe('FileWatcher — queue drain', () => {
     ]);
   });
 });
+
+describe('FileWatcher — onSettle hook', () => {
+  it('fires onSettle after a path settles into the queue', () => {
+    const vault = new FakeVault();
+    const onSettle = vi.fn();
+    const watcher = new FileWatcher(new FakePlugin(), vault, { onSettle });
+    watcher.start();
+
+    vault.emit('modify', makeFile('note.md'));
+    expect(onSettle).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(2000);
+
+    expect(onSettle).toHaveBeenCalledTimes(1);
+  });
+
+  it('fires onSettle once per path-settle, not once globally', () => {
+    const vault = new FakeVault();
+    const onSettle = vi.fn();
+    const watcher = new FileWatcher(new FakePlugin(), vault, { onSettle });
+    watcher.start();
+
+    vault.emit('modify', makeFile('a.md'));
+    vault.emit('modify', makeFile('b.md'));
+    vi.advanceTimersByTime(2000);
+
+    expect(onSettle).toHaveBeenCalledTimes(2);
+  });
+
+  it('coalesces rapid same-path emits — onSettle fires once', () => {
+    const vault = new FakeVault();
+    const onSettle = vi.fn();
+    const watcher = new FileWatcher(new FakePlugin(), vault, { onSettle });
+    watcher.start();
+
+    vault.emit('modify', makeFile('note.md'));
+    vi.advanceTimersByTime(500);
+    vault.emit('modify', makeFile('note.md'));
+    vi.advanceTimersByTime(500);
+    vault.emit('modify', makeFile('note.md'));
+    vi.advanceTimersByTime(2000);
+
+    expect(onSettle).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not fire onSettle for ignored paths', () => {
+    const vault = new FakeVault();
+    const onSettle = vi.fn();
+    const watcher = new FileWatcher(new FakePlugin(), vault, { onSettle });
+    watcher.start();
+
+    vault.emit('modify', makeFile('.obsidian/workspace.json'));
+    vault.emit('modify', makeFile('.trash/deleted.md'));
+    vi.advanceTimersByTime(2000);
+
+    expect(onSettle).not.toHaveBeenCalled();
+  });
+});

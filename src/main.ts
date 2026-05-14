@@ -19,6 +19,7 @@ import type { WrappedKey } from './crypto/types';
 import { ManifestManager } from './sync/manifest';
 import { FileWatcher } from './sync/watcher';
 import { SyncEngine, type ConflictHandler, type ConflictResolution } from './sync/engine';
+import { AutoSyncController } from './sync/auto-sync';
 import { hydrateKnownSynced } from './sync/known-synced';
 import { compileIgnorePrefixes, isIgnored } from './sync/ignore';
 import { LoginModal } from './ui/login-modal';
@@ -45,6 +46,7 @@ export default class SilentStoneSyncPlugin extends Plugin {
   vaultClient: VaultClient | null = null;
   private vaultEngine: SyncEngine | null = null;
   private vaultKey: Uint8Array | null = null;
+  private vaultAutoSync: AutoSyncController | null = null;
 
   // ── Trust-the-sync (v0.1.7) ───────────────────────
   /** Last-known metrics from a successful sync, restored on plugin reload. */
@@ -154,8 +156,9 @@ export default class SilentStoneSyncPlugin extends Plugin {
       });
     }
 
-    // TODO: Register vault file watchers for auto-sync
-    // TODO: Set up periodic sync interval
+    // TODO: Set up periodic sync interval (LOC-? sibling ticket).
+    // The vault file watcher + auto-sync trigger are wired in armVaultRuntime()
+    // because they require an unlocked master key.
   }
 
   onunload(): void {
@@ -389,6 +392,11 @@ export default class SilentStoneSyncPlugin extends Plugin {
     const manifest = new ManifestManager(vaultClient, masterKey);
     const watcher = new FileWatcher(this, this.app.vault, {
       ignorePaths: this.settings.ignorePaths,
+      // Lazy closure — the controller field is assigned later in this function.
+      // Resolving `this.vaultAutoSync` at call time means the first onSettle
+      // can't fire until the watcher's per-path debounce window (default 2s)
+      // expires, by which point the controller exists.
+      onSettle: () => this.vaultAutoSync?.notify(),
     });
     watcher.start();
 
@@ -450,8 +458,15 @@ export default class SilentStoneSyncPlugin extends Plugin {
       },
     });
 
+    const autoSync = new AutoSyncController({
+      engine,
+      onError: (err) => console.warn('[silent-stone] auto-sync failed:', err),
+    });
+    if (this.settings.autoSync) autoSync.start();
+
     this.vaultClient = vaultClient;
     this.vaultEngine = engine;
+    this.vaultAutoSync = autoSync;
     this.vaultKey = masterKey;
     this.status = 'idle';
     this.updateStatusBar();
@@ -481,6 +496,8 @@ export default class SilentStoneSyncPlugin extends Plugin {
 
   lockVault(): void {
     if (this.vaultKey) this.vaultKey.fill(0);
+    this.vaultAutoSync?.stop();
+    this.vaultAutoSync = null;
     this.vaultClient = null;
     this.vaultEngine = null;
     this.vaultKey = null;
@@ -503,6 +520,8 @@ export default class SilentStoneSyncPlugin extends Plugin {
   async logoutVault(): Promise<void> {
     // In-memory teardown — mirrors lockVault, but no Notice (we show our own).
     if (this.vaultKey) this.vaultKey.fill(0);
+    this.vaultAutoSync?.stop();
+    this.vaultAutoSync = null;
     this.vaultClient = null;
     this.vaultEngine = null;
     this.vaultKey = null;
@@ -535,6 +554,18 @@ export default class SilentStoneSyncPlugin extends Plugin {
       const msg = e instanceof Error ? e.message : 'Unknown error';
       new Notice(`Vault sync failed: ${msg}`);
     }
+  }
+
+  /**
+   * Start or stop the auto-sync controller. No-op when the vault is locked
+   * (controller is null until armVaultRuntime constructs it); the persisted
+   * `settings.autoSync` flag is consulted on the next unlock so the toggle
+   * state survives a lock/unlock round-trip.
+   */
+  setAutoSyncEnabled(value: boolean): void {
+    if (!this.vaultAutoSync) return;
+    if (value) this.vaultAutoSync.start();
+    else this.vaultAutoSync.stop();
   }
 
   private async checkConnection(): Promise<void> {

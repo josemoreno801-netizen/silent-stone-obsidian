@@ -204,6 +204,7 @@ export class SilentStoneSyncSettingTab extends PluginSettingTab {
         toggle.setValue(this.plugin.settings.autoSync).onChange(async (value) => {
           this.plugin.settings.autoSync = value;
           await this.plugin.saveSettings();
+          this.plugin.setAutoSyncEnabled(value);
         }),
       );
 
