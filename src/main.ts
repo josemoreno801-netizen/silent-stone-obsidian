@@ -18,15 +18,20 @@ import {
 import type { WrappedKey } from './crypto/types';
 import { ManifestManager } from './sync/manifest';
 import { FileWatcher } from './sync/watcher';
-import { SyncEngine, type ConflictHandler, type ConflictResolution } from './sync/engine';
+import { SyncEngine, type ConflictHandler } from './sync/engine';
 import { AutoSyncController } from './sync/auto-sync';
 import { PeriodicSyncController } from './sync/periodic-sync';
 import { hydrateKnownSynced } from './sync/known-synced';
 import { compileIgnorePrefixes, isIgnored } from './sync/ignore';
+import {
+  createConflictHandler,
+  type ConflictHandlerWithReset,
+} from './sync/conflict-handler';
 import { LoginModal } from './ui/login-modal';
 import { LogoutModal } from './ui/logout-modal';
 import { SetupModal } from './ui/setup-modal';
 import { UnlockModal } from './ui/unlock-modal';
+import { ConflictModal, type ConflictModalChoice } from './ui/sync-modal';
 
 const KNOWN_SYNCED_KEY = 'vault.knownSynced';
 const SYNC_METRICS_KEY = 'vault.syncMetrics';
@@ -49,6 +54,7 @@ export default class SilentStoneSyncPlugin extends Plugin {
   private vaultKey: Uint8Array | null = null;
   private vaultAutoSync: AutoSyncController | null = null;
   private vaultPeriodicSync: PeriodicSyncController | null = null;
+  private vaultConflictHandler: ConflictHandlerWithReset | null = null;
 
   // ── Trust-the-sync (v0.1.7) ───────────────────────
   /** Last-known metrics from a successful sync, restored on plugin reload. */
@@ -436,6 +442,14 @@ export default class SilentStoneSyncPlugin extends Plugin {
       knownSynced,
       onConflict: this.makeConflictHandler(),
       onStatusChange: (event) => {
+        // Reset the conflict handler's apply-to-all memory at the start of every
+        // sync phase. The user's "apply to all" choice is scoped to a single round,
+        // not "forever" — without this, a stale choice from yesterday's sync would
+        // silently steamroll today's conflicts.
+        if (event.state === 'syncing') {
+          this.vaultConflictHandler?.reset();
+        }
+
         this.status =
           event.state === 'idle' ? 'idle' : event.state === 'syncing' ? 'syncing' : 'error';
 
@@ -487,23 +501,26 @@ export default class SilentStoneSyncPlugin extends Plugin {
   /**
    * Build the conflict handler the engine consults when a real divergence is detected.
    * Honors `settings.conflictStrategy`:
-   *   - `keep-local` / `keep-server` / `keep-both` → return directly.
-   *   - `ask` → fall back to `keep-server` until LOC-12 lands the modal. A Notice
-   *     surfaces the fallback so the user is aware their `'ask'` preference is being
-   *     deferred (rather than silently picking server).
+   *   - `keep-local` / `keep-server` / `keep-both` → return directly (no UI).
+   *   - `ask` → open ConflictModal per file. The factory remembers an "apply to all"
+   *     choice across the sync round; `onStatusChange` resets that memory on every
+   *     `'syncing'` event so the choice never leaks into a future round.
    */
   private makeConflictHandler(): ConflictHandler {
-    return (info): ConflictResolution => {
-      const strategy = this.settings.conflictStrategy;
-      if (strategy === 'keep-local' || strategy === 'keep-server' || strategy === 'keep-both') {
-        return strategy;
-      }
-      new Notice(
-        `Conflict on ${info.path}: keeping server copy (interactive prompt coming in a future update).`,
-        6000,
-      );
-      return 'keep-server';
-    };
+    this.vaultConflictHandler = createConflictHandler({
+      getStrategy: () => this.settings.conflictStrategy,
+      openConflictModal: async (info) => {
+        const stat = await this.app.vault.adapter.stat(info.path);
+        const localModifiedAt = stat?.mtime ?? 0;
+        return new Promise<ConflictModalChoice | null>((resolve) => {
+          const modal = new ConflictModal(this.app, info, localModifiedAt, {
+            onResolve: (c) => resolve(c),
+          });
+          modal.open();
+        });
+      },
+    });
+    return this.vaultConflictHandler.handler;
   }
 
   lockVault(): void {
