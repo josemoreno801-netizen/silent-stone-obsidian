@@ -20,6 +20,7 @@ import { ManifestManager } from './sync/manifest';
 import { FileWatcher } from './sync/watcher';
 import { SyncEngine, type ConflictHandler, type ConflictResolution } from './sync/engine';
 import { AutoSyncController } from './sync/auto-sync';
+import { PeriodicSyncController } from './sync/periodic-sync';
 import { hydrateKnownSynced } from './sync/known-synced';
 import { compileIgnorePrefixes, isIgnored } from './sync/ignore';
 import { LoginModal } from './ui/login-modal';
@@ -47,6 +48,7 @@ export default class SilentStoneSyncPlugin extends Plugin {
   private vaultEngine: SyncEngine | null = null;
   private vaultKey: Uint8Array | null = null;
   private vaultAutoSync: AutoSyncController | null = null;
+  private vaultPeriodicSync: PeriodicSyncController | null = null;
 
   // ── Trust-the-sync (v0.1.7) ───────────────────────
   /** Last-known metrics from a successful sync, restored on plugin reload. */
@@ -156,13 +158,16 @@ export default class SilentStoneSyncPlugin extends Plugin {
       });
     }
 
-    // TODO: Set up periodic sync interval (LOC-? sibling ticket).
-    // The vault file watcher + auto-sync trigger are wired in armVaultRuntime()
-    // because they require an unlocked master key.
+    // The vault file watcher, auto-sync trigger, and periodic-sync timer are
+    // wired in armVaultRuntime() because they all require an unlocked master key.
   }
 
   onunload(): void {
-    // Obsidian handles cleanup of registered events/commands automatically
+    // Obsidian auto-cleans registerEvent/addCommand/etc, but not the self-managed
+    // setTimeout/setInterval inside our sync controllers — stop them explicitly
+    // so neither fires after the plugin is disabled.
+    this.vaultAutoSync?.stop();
+    this.vaultPeriodicSync?.stop();
   }
 
   async loadSettings(): Promise<void> {
@@ -464,9 +469,16 @@ export default class SilentStoneSyncPlugin extends Plugin {
     });
     if (this.settings.autoSync) autoSync.start();
 
+    const periodicSync = new PeriodicSyncController({
+      engine,
+      onError: (err) => console.warn('[silent-stone] periodic sync failed:', err),
+    });
+    if (this.settings.autoSync) periodicSync.start(this.settings.syncInterval * 60_000);
+
     this.vaultClient = vaultClient;
     this.vaultEngine = engine;
     this.vaultAutoSync = autoSync;
+    this.vaultPeriodicSync = periodicSync;
     this.vaultKey = masterKey;
     this.status = 'idle';
     this.updateStatusBar();
@@ -498,6 +510,8 @@ export default class SilentStoneSyncPlugin extends Plugin {
     if (this.vaultKey) this.vaultKey.fill(0);
     this.vaultAutoSync?.stop();
     this.vaultAutoSync = null;
+    this.vaultPeriodicSync?.stop();
+    this.vaultPeriodicSync = null;
     this.vaultClient = null;
     this.vaultEngine = null;
     this.vaultKey = null;
@@ -522,6 +536,8 @@ export default class SilentStoneSyncPlugin extends Plugin {
     if (this.vaultKey) this.vaultKey.fill(0);
     this.vaultAutoSync?.stop();
     this.vaultAutoSync = null;
+    this.vaultPeriodicSync?.stop();
+    this.vaultPeriodicSync = null;
     this.vaultClient = null;
     this.vaultEngine = null;
     this.vaultKey = null;
@@ -557,15 +573,31 @@ export default class SilentStoneSyncPlugin extends Plugin {
   }
 
   /**
-   * Start or stop the auto-sync controller. No-op when the vault is locked
-   * (controller is null until armVaultRuntime constructs it); the persisted
-   * `settings.autoSync` flag is consulted on the next unlock so the toggle
-   * state survives a lock/unlock round-trip.
+   * Start or stop both auto-sync controllers (file watcher + periodic interval).
+   * No-op when the vault is locked (controllers are null until armVaultRuntime
+   * constructs them); the persisted `settings.autoSync` flag is consulted on the
+   * next unlock so the toggle state survives a lock/unlock round-trip.
    */
   setAutoSyncEnabled(value: boolean): void {
-    if (!this.vaultAutoSync) return;
-    if (value) this.vaultAutoSync.start();
-    else this.vaultAutoSync.stop();
+    if (this.vaultAutoSync) {
+      if (value) this.vaultAutoSync.start();
+      else this.vaultAutoSync.stop();
+    }
+    if (this.vaultPeriodicSync) {
+      if (value) this.vaultPeriodicSync.start(this.settings.syncInterval * 60_000);
+      else this.vaultPeriodicSync.stop();
+    }
+  }
+
+  /**
+   * Update the periodic-sync cadence. No-op when the vault is locked or
+   * auto-sync is disabled — the persisted `settings.syncInterval` is picked up
+   * on the next unlock or auto-sync toggle.
+   */
+  setPeriodicSyncInterval(minutes: number): void {
+    if (!this.vaultPeriodicSync) return;
+    if (!this.settings.autoSync) return;
+    this.vaultPeriodicSync.setIntervalMs(minutes * 60_000);
   }
 
   private async checkConnection(): Promise<void> {
