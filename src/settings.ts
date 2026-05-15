@@ -219,6 +219,7 @@ export class SilentStoneSyncSettingTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.syncInterval = value;
             await this.plugin.saveSettings();
+            this.plugin.setPeriodicSyncInterval(value);
           }),
       );
 
