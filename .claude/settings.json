@@ -11,5 +11,11 @@
         ]
       }
     ]
-  }
+  },
+  "extraKnownMarketplaces": {
+    "silent-stone-org": {
+      "source": { "source": "github", "repo": "josemoreno801-netizen/silent-stone-claude" }
+    }
+  },
+  "enabledPlugins": { "silent-stone@silent-stone-org": true }
 }
