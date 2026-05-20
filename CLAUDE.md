@@ -88,7 +88,7 @@ Two API clients, two product tracks (see `docs/DEV.md` § 7 + § 10 for plugin-s
 
 ### Syncthing Track (`SilentStoneClient` in `api/client.ts`)
 
-> Track scheduled for removal — server-side Syncthing amputation in progress in the `silent-stone` repo (Phase 1 admin dashboard panel host merged 2026-04-29). The plugin's `SilentStoneClient` will become vestigial when `/api/folders` endpoints are removed. New plugin work should target the Vault Track only.
+> Track scheduled for removal — server-side Syncthing amputation in progress in the `silent-stone-web` repo (Phase 1 admin dashboard panel host merged 2026-04-29). The plugin's `SilentStoneClient` will become vestigial when `/api/folders` endpoints are removed. New plugin work should target the Vault Track only.
 
 | Endpoint | Purpose | Status |
 |----------|---------|--------|
@@ -130,7 +130,7 @@ Two API clients, two product tracks (see `docs/DEV.md` § 7 + § 10 for plugin-s
 
 - `docs/DEV.md` — API reference, tester onboarding, release workflow deep-dive
 - `docs/ARCHITECTURE.md` — System design + diagrams
-- Server API reference lives in the private `silent-stone` repo (not public)
+- Server API reference lives in the private `silent-stone-web` repo (not public)
 
 ## Repository Context
 

@@ -13,9 +13,9 @@
     ]
   },
   "extraKnownMarketplaces": {
-    "silent-stone-org": {
+    "silent-stone-hq": {
       "source": { "source": "github", "repo": "josemoreno801-netizen/silent-stone-claude" }
     }
   },
-  "enabledPlugins": { "silent-stone@silent-stone-org": true }
+  "enabledPlugins": { "silent-stone@silent-stone-hq": true }
 }
